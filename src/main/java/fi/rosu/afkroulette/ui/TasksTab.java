@@ -159,6 +159,14 @@ public class TasksTab extends JPanel
 		select(category);
 	}
 
+	/** Drops any reply or reel still on its way (plugin shutting down). */
+	public void cancelPending()
+	{
+		generation++;
+		busy = false;
+		refreshButtons();
+	}
+
 	private void select(Category c)
 	{
 		// A reply always belongs to the category it was requested for.
@@ -241,7 +249,14 @@ public class TasksTab extends JPanel
 				q.put("tier", category.key);
 		}
 		setStatus("Rolling...", Ui.MUTED);
-		request(() -> api.get(path, q, (json, error) -> ui(() -> showAfterReel(json, error, null))));
+		int gen = generation;
+		request(() -> api.get(path, q, (json, error) -> ui(() ->
+		{
+			if (gen == generation)
+			{
+				showAfterReel(json, error, null, gen);
+			}
+		})));
 	}
 
 	private void complete(String result)
@@ -264,11 +279,16 @@ public class TasksTab extends JPanel
 		}
 		String okMessage = "done".equals(result) ? "Task completed!" : null;
 		String target = path;
+		int gen = generation;
 		request(() -> api.post(target, body, (json, error) -> ui(() ->
 		{
+			if (gen != generation)
+			{
+				return;
+			}
 			if (error != null || category == Category.AFK)
 			{
-				showAfterReel(json, error, okMessage);
+				showAfterReel(json, error, okMessage, gen);
 				return;
 			}
 			busy = false;
@@ -293,7 +313,7 @@ public class TasksTab extends JPanel
 	}
 
 	/** A fresh roll spins the reel first; the card fills in when it stops. */
-	private void showAfterReel(JsonObject json, String error, String okMessage)
+	private void showAfterReel(JsonObject json, String error, String okMessage, int gen)
 	{
 		long delay = 0;
 		if (error == null && json != null && json.has("reel") && json.get("reel").isJsonArray())
@@ -318,10 +338,9 @@ public class TasksTab extends JPanel
 			showResponse(json, error, okMessage);
 			return;
 		}
-		int expected = generation;
 		Timer timer = new Timer((int) delay, e ->
 		{
-			if (expected == generation)
+			if (gen == generation)
 			{
 				showResponse(json, null, okMessage);
 			}
@@ -507,6 +526,10 @@ public class TasksTab extends JPanel
 	private void refreshButtons()
 	{
 		boolean loggedIn = player.getName() != null;
+		for (JButton b : categoryButtons.values())
+		{
+			b.setEnabled(!busy);
+		}
 		roll.setEnabled(loggedIn && !busy);
 		done.setEnabled(loggedIn && !busy && hasTask && !taskIsDone);
 		skip.setEnabled(loggedIn && !busy && hasTask && !taskIsDone);

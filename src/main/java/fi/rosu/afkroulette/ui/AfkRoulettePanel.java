@@ -70,6 +70,12 @@ public class AfkRoulettePanel extends PluginPanel
 	}
 
 	/** Safe to call from any thread. */
+	public void onShutdown()
+	{
+		SwingUtilities.invokeLater(tasksTab::cancelPending);
+	}
+
+	/** Safe to call from any thread. */
 	public void onConfigChanged()
 	{
 		SwingUtilities.invokeLater(() ->

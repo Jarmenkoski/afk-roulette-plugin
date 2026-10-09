@@ -16,6 +16,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.atomic.AtomicReference;
 import javax.inject.Inject;
 import javax.inject.Singleton;
 import net.runelite.api.Client;
@@ -27,7 +28,6 @@ import net.runelite.client.ui.FontManager;
 import net.runelite.client.ui.overlay.Overlay;
 import net.runelite.client.ui.overlay.OverlayLayer;
 import net.runelite.client.ui.overlay.OverlayPosition;
-import net.runelite.client.ui.overlay.OverlayPriority;
 
 /**
  * A case-opening style reel drawn over the game view when a task is rolled:
@@ -46,8 +46,10 @@ public class RollOverlay extends Overlay
 	private static final int STEP = TILE + GAP;
 	private static final int VISIBLE = 7;
 	private static final int ICON = 40;
+	/** Tiles in front of the start position, so the reel is full from the first frame. */
+	private static final int LEAD = VISIBLE / 2 + 1;
 	/** Index of the rolled task on the reel: enough tiles before it for a long spin. */
-	private static final int WINNER_INDEX = 30;
+	private static final int WINNER_INDEX = LEAD + 30;
 	private static final long TICK_SOUND_GAP_MS = 70;
 
 	private static final Color BACKGROUND = new Color(20, 18, 15, 225);
@@ -59,8 +61,8 @@ public class RollOverlay extends Overlay
 	private final SkillIconManager skillIconManager;
 	private final AfkRouletteConfig config;
 
-	/** Replaced as a whole from the Swing thread; read on the client thread. */
-	private volatile Spin spin;
+	/** Set from the Swing thread, cleared on the client thread when the reel has faded. */
+	private final AtomicReference<Spin> spin = new AtomicReference<>();
 
 	/** One reel icon: an item or a skill. */
 	public static final class Icon
@@ -117,7 +119,7 @@ public class RollOverlay extends Overlay
 		this.config = config;
 		setPosition(OverlayPosition.DYNAMIC);
 		setLayer(OverlayLayer.ABOVE_WIDGETS);
-		setPriority(OverlayPriority.HIGH);
+		setPriority(PRIORITY_HIGH);
 	}
 
 	/**
@@ -135,14 +137,19 @@ public class RollOverlay extends Overlay
 		{
 			tiles.add(i == WINNER_INDEX ? winner : reel.get(i % reel.size()));
 		}
-		spin = new Spin(tiles, heading, result);
+		spin.set(new Spin(tiles, heading, result));
 		return SPIN_MS;
+	}
+
+	public void stop()
+	{
+		spin.set(null);
 	}
 
 	@Override
 	public Dimension render(Graphics2D g)
 	{
-		Spin s = spin;
+		Spin s = spin.get();
 		if (s == null)
 		{
 			return null;
@@ -150,14 +157,16 @@ public class RollOverlay extends Overlay
 		long t = System.currentTimeMillis() - s.start;
 		if (t > SPIN_MS + HOLD_MS + FADE_MS)
 		{
-			spin = null;
+			// A reel started meanwhile must not be cleared.
+			spin.compareAndSet(s, null);
 			return null;
 		}
 
 		double p = Math.min(1.0, t / (double) SPIN_MS);
 		double eased = 1 - Math.pow(1 - p, 4);
-		double distance = WINNER_INDEX * STEP + s.stopOffset;
-		double pos = distance * eased;
+		double startPos = LEAD * STEP;
+		double distance = (WINNER_INDEX - LEAD) * STEP + s.stopOffset;
+		double pos = startPos + distance * eased;
 		boolean stopped = p >= 1.0;
 		playSounds(s, pos, stopped);
 
@@ -169,7 +178,7 @@ public class RollOverlay extends Overlay
 			g.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC_OVER, alpha));
 		}
 		g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-		g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR);
+		g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
 
 		int width = VISIBLE * STEP + GAP;
 		int height = TILE + 70;
@@ -230,7 +239,9 @@ public class RollOverlay extends Overlay
 
 	private void playSounds(Spin s, double pos, boolean stopped)
 	{
-		if (!config.rollSound())
+		// playSoundEffect(id) would play even with game sounds muted; follow the player's volume.
+		int volume = client.getPreferences().getSoundEffectVolume();
+		if (!config.rollSound() || volume <= 0)
 		{
 			return;
 		}
@@ -238,14 +249,14 @@ public class RollOverlay extends Overlay
 		long now = System.currentTimeMillis();
 		if (!stopped && tile != s.lastTile && now - s.lastSound >= TICK_SOUND_GAP_MS)
 		{
-			client.playSoundEffect(SoundEffectID.UI_BOOP);
+			client.playSoundEffect(SoundEffectID.UI_BOOP, volume);
 			s.lastSound = now;
 		}
 		s.lastTile = tile;
 		if (stopped && !s.winSoundPlayed)
 		{
 			s.winSoundPlayed = true;
-			client.playSoundEffect(SoundEffectID.GE_ADD_OFFER_DINGALING);
+			client.playSoundEffect(SoundEffectID.GE_ADD_OFFER_DINGALING, volume);
 		}
 	}
 

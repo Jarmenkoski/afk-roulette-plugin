@@ -114,6 +114,8 @@ public class AfkRoulettePlugin extends Plugin
 		eventBus.unregister(tracker);
 		clientThread.invoke(tracker::reset);
 		overlayManager.remove(rollOverlay);
+		rollOverlay.stop();
+		panel.onShutdown();
 		clientToolbar.removeNavigation(navButton);
 		navButton = null;
 		panel = null;
