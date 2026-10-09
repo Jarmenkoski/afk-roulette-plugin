@@ -15,9 +15,9 @@ import lombok.extern.slf4j.Slf4j;
  * Uploads the player's data to the group, sending only the parts that changed
  * since the last successful upload and re-queueing them if an upload fails.
  *
- * The change-tracking approach is adapted from Group Ironmen Tracker's
- * DataManager / DataState (https://github.com/christoabrown/group-ironmen-tracker),
- * Copyright (c) 2022, Christopher Brown, BSD 2-Clause License.
+ * The idea of uploading only changed data is the same one Group Ironmen Tracker
+ * (https://github.com/christoabrown/group-ironmen-tracker) uses; this is our own
+ * implementation.
  */
 @Slf4j
 @Singleton

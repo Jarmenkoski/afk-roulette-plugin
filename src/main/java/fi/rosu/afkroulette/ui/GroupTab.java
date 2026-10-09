@@ -1,5 +1,7 @@
 package fi.rosu.afkroulette.ui;
 
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
 import fi.rosu.afkroulette.AfkRouletteConfig;
 import fi.rosu.afkroulette.ApiClient;
 import fi.rosu.afkroulette.GroupData;
@@ -57,6 +59,7 @@ public class GroupTab extends JPanel
 		Skill.CONSTRUCTION, Skill.HUNTER, Skill.SAILING,
 	};
 	private static final long STALE_MILLIS = 60_000;
+	private static final int SCORE_ROWS = 5;
 
 	private final GroupData group;
 	private final ItemManager itemManager;
@@ -67,6 +70,7 @@ public class GroupTab extends JPanel
 	private final PlayerState player;
 	private final JPanel groupBox = new JPanel(new DynamicGridLayout(0, 1, 0, 4));
 	private final JPanel list = new JPanel(new DynamicGridLayout(0, 1, 0, 6));
+	private final JPanel scores = new JPanel(new DynamicGridLayout(0, 1, 0, 2));
 	private final JLabel status = Ui.label("", Ui.MUTED, false);
 	private final JButton refresh = Ui.button("Refresh");
 	private final Set<String> expanded = new HashSet<>();
@@ -93,6 +97,8 @@ public class GroupTab extends JPanel
 		add(refresh);
 		add(status);
 		add(list);
+		scores.setOpaque(false);
+		add(scores);
 		rebuildGroupBox();
 	}
 
@@ -113,6 +119,9 @@ public class GroupTab extends JPanel
 			list.removeAll();
 			list.revalidate();
 			list.repaint();
+			scores.removeAll();
+			scores.revalidate();
+			scores.repaint();
 			refresh.setVisible(false);
 			setStatus("");
 			return;
@@ -120,6 +129,7 @@ public class GroupTab extends JPanel
 		refresh.setVisible(true);
 		refresh.setEnabled(false);
 		setStatus("Loading...");
+		loadScores();
 		group.refresh(() ->
 		{
 			refresh.setEnabled(true);
@@ -296,6 +306,67 @@ public class GroupTab extends JPanel
 	{
 		label.setForeground(color);
 		label.setText(Ui.wrap(text, Ui.TEXT_WIDTH - 16));
+	}
+
+	/** The group's own highscores (the server scopes them by the group token). */
+	private void loadScores()
+	{
+		api.get("/api/leaderboard", null, (afk, afkError) ->
+			api.get("/api/tasker/highscores", null, (tasker, taskerError) -> SwingUtilities.invokeLater(() ->
+			{
+				scores.removeAll();
+				if (afkError == null && taskerError == null && inGroup())
+				{
+					scores.add(Ui.label("Group highscores", Ui.GOLD, true));
+					addAfkScores(afk);
+					addTaskerScores(tasker, "task", "Task");
+					addTaskerScores(tasker, "boss", "Boss");
+					addTaskerScores(tasker, "collection", "Collection log");
+				}
+				scores.revalidate();
+				scores.repaint();
+			})));
+	}
+
+	private void addAfkScores(JsonObject json)
+	{
+		if (!json.has("players") || json.getAsJsonArray("players").size() == 0)
+		{
+			return;
+		}
+		scores.add(Ui.label("AFK (daily)", Ui.MUTED, true));
+		int rank = 1;
+		for (JsonElement el : json.getAsJsonArray("players"))
+		{
+			JsonObject p = el.getAsJsonObject();
+			scores.add(Ui.label(rank + ". " + p.get("nick").getAsString() + " — streak " + p.get("current").getAsInt()
+				+ " · done " + p.get("done").getAsInt() + " · skips " + p.get("skips").getAsInt(),
+				ColorScheme.LIGHT_GRAY_COLOR, false));
+			if (++rank > SCORE_ROWS)
+			{
+				break;
+			}
+		}
+	}
+
+	private void addTaskerScores(JsonObject json, String key, String title)
+	{
+		if (!json.has(key) || json.getAsJsonArray(key).size() == 0)
+		{
+			return;
+		}
+		scores.add(Ui.label(title, Ui.MUTED, true));
+		int rank = 1;
+		for (JsonElement el : json.getAsJsonArray(key))
+		{
+			JsonObject p = el.getAsJsonObject();
+			scores.add(Ui.label(rank + ". " + p.get("nick").getAsString() + " — done " + p.get("done").getAsInt()
+				+ " · skips " + p.get("skips").getAsInt(), ColorScheme.LIGHT_GRAY_COLOR, false));
+			if (++rank > SCORE_ROWS)
+			{
+				break;
+			}
+		}
 	}
 
 	private void render()

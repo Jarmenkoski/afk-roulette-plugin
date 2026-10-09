@@ -29,4 +29,6 @@ With the server options on, the plugin sends your IP address and, if sharing is 
 
 ## Credits
 
-The group sync's change tracking is adapted from [Group Ironmen Tracker](https://github.com/christoabrown/group-ironmen-tracker) by Christopher Brown (BSD 2-Clause). Collection log task data comes from [OSRS-Taskman/task-list](https://github.com/OSRS-Taskman/task-list).
+- Task data (AFK methods and xp rates, quest and diary requirements, collection log pages) is compiled on the AFK Roulette server from the [Old School RuneScape Wiki](https://oldschool.runescape.wiki), used under [CC BY-NC-SA 3.0](https://creativecommons.org/licenses/by-nc-sa/3.0/).
+- The idea of uploading only changed data comes from [Group Ironmen Tracker](https://github.com/christoabrown/group-ironmen-tracker); the code here is our own.
+- Old School RuneScape is a trademark of Jagex Ltd. This plugin is a non-commercial fan project and is not affiliated with Jagex.
