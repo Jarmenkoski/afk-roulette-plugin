@@ -8,15 +8,22 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '11'
       - name: Build
-        run: chmod +x gradlew && ./gradlew build --no-daemon
+        run: chmod +x gradlew && ./gradlew build shadowJar --no-daemon
       - name: Upload plugin jar
         uses: actions/upload-artifact@v4
         with:
           name: afk-roulette-plugin
-          path: build/libs/afk-roulette-*.jar
+          path: build/libs/afk-roulette-0.1.0.jar
+      # RuneLite client + plugin in one jar, for testing in-game before the
+      # plugin is on the Plugin Hub (the launcher-started client can't sideload).
+      - name: Upload test client
+        uses: actions/upload-artifact@v4
+        with:
+          name: afk-roulette-test-client
+          path: build/libs/afk-roulette-0.1.0-all.jar
