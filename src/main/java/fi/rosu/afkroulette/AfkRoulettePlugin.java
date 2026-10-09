@@ -1,6 +1,7 @@
 package fi.rosu.afkroulette;
 
 import com.google.inject.Provides;
+import fi.rosu.afkroulette.reel.RollOverlay;
 import fi.rosu.afkroulette.sync.SyncManager;
 import fi.rosu.afkroulette.tracker.TaskTracker;
 import fi.rosu.afkroulette.ui.AfkRoulettePanel;
@@ -38,6 +39,7 @@ import net.runelite.client.plugins.PluginDescriptor;
 import net.runelite.client.task.Schedule;
 import net.runelite.client.ui.ClientToolbar;
 import net.runelite.client.ui.NavigationButton;
+import net.runelite.client.ui.overlay.OverlayManager;
 import net.runelite.client.util.ImageUtil;
 
 @Slf4j
@@ -75,6 +77,10 @@ public class AfkRoulettePlugin extends Plugin
 	private EventBus eventBus;
 	@Inject
 	private ClientThread clientThread;
+	@Inject
+	private OverlayManager overlayManager;
+	@Inject
+	private RollOverlay rollOverlay;
 
 	private AfkRoulettePanel panel;
 	private NavigationButton navButton;
@@ -93,6 +99,7 @@ public class AfkRoulettePlugin extends Plugin
 			.panel(panel)
 			.build();
 		clientToolbar.addNavigation(navButton);
+		overlayManager.add(rollOverlay);
 		eventBus.register(tracker);
 
 		if (client.getGameState() == GameState.LOGGED_IN)
@@ -106,6 +113,7 @@ public class AfkRoulettePlugin extends Plugin
 	{
 		eventBus.unregister(tracker);
 		clientThread.invoke(tracker::reset);
+		overlayManager.remove(rollOverlay);
 		clientToolbar.removeNavigation(navButton);
 		navButton = null;
 		panel = null;

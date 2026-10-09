@@ -4,7 +4,9 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import fi.rosu.afkroulette.ApiClient;
 import fi.rosu.afkroulette.PlayerState;
+import fi.rosu.afkroulette.reel.RollOverlay;
 import fi.rosu.afkroulette.tracker.TaskTracker;
+import java.awt.BorderLayout;
 import java.awt.Cursor;
 import java.awt.GridLayout;
 import java.awt.event.MouseAdapter;
@@ -20,6 +22,7 @@ import javax.swing.JButton;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.SwingUtilities;
+import javax.swing.Timer;
 import javax.swing.border.EmptyBorder;
 import net.runelite.client.ui.ColorScheme;
 import net.runelite.client.ui.DynamicGridLayout;
@@ -38,24 +41,27 @@ public class TasksTab extends JPanel
 
 	private enum Category
 	{
-		AFK("AFK", "afk"),
-		TASK("Task", "task"),
-		BOSS("Boss", "boss"),
-		COLLECTION("Clog", "collection");
+		AFK("AFK", "afk", "Daily AFK task"),
+		TASK("Task", "task", "Skill task"),
+		BOSS("Boss", "boss", "Boss task"),
+		COLLECTION("Clog", "collection", "Collection log task");
 
 		final String label;
 		final String key;
+		final String heading;
 
-		Category(String label, String key)
+		Category(String label, String key, String heading)
 		{
 			this.label = label;
 			this.key = key;
+			this.heading = heading;
 		}
 	}
 
 	private final ApiClient api;
 	private final PlayerState player;
 	private final TaskTracker tracker;
+	private final RollOverlay rollOverlay;
 	private final Map<Category, JButton> categoryButtons = new EnumMap<>(Category.class);
 	private final JLabel title = Ui.label("", Ui.GOLD, true);
 	private final JLabel meta = Ui.label("", Ui.MUTED, false);
@@ -77,13 +83,16 @@ public class TasksTab extends JPanel
 	private String pendingStatus;
 	/** Name of the task on the card, sent with Done/Skip so a stale card can't finish another task. */
 	private String shownTaskName;
+	/** Bumped when the view changes, so a reel finishing late doesn't show a stale result. */
+	private int generation;
 
 	@Inject
-	TasksTab(ApiClient api, PlayerState player, TaskTracker tracker)
+	TasksTab(ApiClient api, PlayerState player, TaskTracker tracker, RollOverlay rollOverlay)
 	{
 		this.api = api;
 		this.player = player;
 		this.tracker = tracker;
+		this.rollOverlay = rollOverlay;
 		tracker.addListener((cat, completed) -> SwingUtilities.invokeLater(() -> onTracker(cat, completed)));
 
 		setLayout(new DynamicGridLayout(0, 1, 0, 8));
@@ -120,12 +129,17 @@ public class TasksTab extends JPanel
 		card.add(progress);
 		add(card);
 
-		JPanel actions = new JPanel(new GridLayout(2, 2, 4, 4));
+		// BorderLayout skips hidden components, so "Already done" leaves no gap when hidden.
+		JPanel actions = new JPanel(new BorderLayout(0, 4));
 		actions.setOpaque(false);
-		actions.add(roll);
-		actions.add(done);
-		actions.add(skip);
-		actions.add(already);
+		roll.setBackground(ColorScheme.BRAND_ORANGE);
+		actions.add(roll, BorderLayout.NORTH);
+		JPanel finish = new JPanel(new GridLayout(1, 2, 4, 0));
+		finish.setOpaque(false);
+		finish.add(done);
+		finish.add(skip);
+		actions.add(finish, BorderLayout.CENTER);
+		actions.add(already, BorderLayout.SOUTH);
 		add(actions);
 		add(status);
 
@@ -141,6 +155,7 @@ public class TasksTab extends JPanel
 	public void onPlayerChanged()
 	{
 		busy = false;
+		generation++;
 		select(category);
 	}
 
@@ -152,6 +167,7 @@ public class TasksTab extends JPanel
 			return;
 		}
 		category = c;
+		generation++;
 		for (Map.Entry<Category, JButton> e : categoryButtons.entrySet())
 		{
 			e.getValue().setBackground(e.getKey() == c ? ColorScheme.BRAND_ORANGE : ColorScheme.DARKER_GRAY_COLOR);
@@ -225,7 +241,7 @@ public class TasksTab extends JPanel
 				q.put("tier", category.key);
 		}
 		setStatus("Rolling...", Ui.MUTED);
-		request(() -> api.get(path, q, (json, error) -> ui(() -> showResponse(json, error, null))));
+		request(() -> api.get(path, q, (json, error) -> ui(() -> showAfterReel(json, error, null))));
 	}
 
 	private void complete(String result)
@@ -252,7 +268,7 @@ public class TasksTab extends JPanel
 		{
 			if (error != null || category == Category.AFK)
 			{
-				showResponse(json, error, okMessage);
+				showAfterReel(json, error, okMessage);
 				return;
 			}
 			busy = false;
@@ -274,6 +290,57 @@ public class TasksTab extends JPanel
 				roll();
 			}
 		})));
+	}
+
+	/** A fresh roll spins the reel first; the card fills in when it stops. */
+	private void showAfterReel(JsonObject json, String error, String okMessage)
+	{
+		long delay = 0;
+		if (error == null && json != null && json.has("reel") && json.get("reel").isJsonArray())
+		{
+			JsonObject task = json.has("task") && json.get("task").isJsonObject()
+				? json.getAsJsonObject("task") : json;
+			List<RollOverlay.Icon> reel = new ArrayList<>();
+			for (JsonElement e : json.getAsJsonArray("reel"))
+			{
+				RollOverlay.Icon icon = e.isJsonObject() ? icon(e.getAsJsonObject()) : null;
+				if (icon != null)
+				{
+					reel.add(icon);
+				}
+			}
+			RollOverlay.Icon winner = task.has("icon") && task.get("icon").isJsonObject()
+				? icon(task.getAsJsonObject("icon")) : null;
+			delay = rollOverlay.play(reel, winner, "AFK Roulette - " + category.heading, nz(str(task, "name")));
+		}
+		if (delay <= 0)
+		{
+			showResponse(json, error, okMessage);
+			return;
+		}
+		int expected = generation;
+		Timer timer = new Timer((int) delay, e ->
+		{
+			if (expected == generation)
+			{
+				showResponse(json, null, okMessage);
+			}
+		});
+		timer.setRepeats(false);
+		timer.start();
+	}
+
+	private static RollOverlay.Icon icon(JsonObject o)
+	{
+		if (o.has("item") && o.get("item").isJsonPrimitive())
+		{
+			return RollOverlay.Icon.item(o.get("item").getAsInt());
+		}
+		if (o.has("skill") && o.get("skill").isJsonPrimitive())
+		{
+			return RollOverlay.Icon.skill(o.get("skill").getAsString());
+		}
+		return null;
 	}
 
 	private void showResponse(JsonObject json, String error, String okMessage)

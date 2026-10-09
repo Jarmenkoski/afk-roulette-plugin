@@ -33,7 +33,9 @@ final class Ui
 	{
 		String safe = text == null ? "" : text
 			.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
-		return "<html><body style='width:" + width + "px'>" + safe + "</body></html>";
+		// Swing's HTML renderer draws a CSS px as 1.3 screen pixels.
+		int cssWidth = Math.round(width / 1.3f);
+		return "<html><body style='width:" + cssWidth + "px'>" + safe + "</body></html>";
 	}
 
 	static JLabel label(String text, Color color, boolean bold)

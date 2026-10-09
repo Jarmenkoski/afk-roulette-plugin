@@ -45,4 +45,26 @@ public interface AfkRouletteConfig extends Config
 	{
 		return "";
 	}
+
+	@ConfigItem(
+		keyName = "rollAnimation",
+		name = "Roll animation",
+		description = "Spin a reel of icons over the game view when you roll a task",
+		position = 3
+	)
+	default boolean rollAnimation()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "rollSound",
+		name = "Roll sounds",
+		description = "Play ticking and a chime while the roll reel spins (uses the game's sound effect volume)",
+		position = 4
+	)
+	default boolean rollSound()
+	{
+		return true;
+	}
 }
