@@ -31,4 +31,4 @@ With the server options on, the plugin sends your IP address and, if sharing is 
 
 - Task data (AFK methods and xp rates, quest and diary requirements, collection log pages) is compiled on the AFK Roulette server from the [Old School RuneScape Wiki](https://oldschool.runescape.wiki), used under [CC BY-NC-SA 3.0](https://creativecommons.org/licenses/by-nc-sa/3.0/).
 - The idea of uploading only changed data comes from [Group Ironmen Tracker](https://github.com/christoabrown/group-ironmen-tracker); the code here is our own.
-- Old School RuneScape is a trademark of Jagex Ltd. This plugin is a non-commercial fan project and is not affiliated with Jagex.
+- Created using intellectual property belonging to Jagex Limited under the terms of [Jagex's Fan Content Policy](https://legal.jagex.com/docs/policies/fan-content-policy). This content is not endorsed by or affiliated with Jagex. AFK Roulette is a free, non-commercial fan project.
