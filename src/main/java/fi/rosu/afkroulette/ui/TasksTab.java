@@ -375,7 +375,7 @@ public class TasksTab extends JPanel
 		if (category == Category.AFK)
 		{
 			showAfk(json);
-			if (okMessage != null)
+			if (okMessage != null && !taskIsDone)
 			{
 				setStatus(okMessage + " " + stats(json), Ui.OK);
 			}
@@ -425,7 +425,14 @@ public class TasksTab extends JPanel
 		tip.setText(Ui.wrap(nz(str(t, "notes"))));
 		setWiki(str(t, "url"));
 		updateProgress();
-		setStatus(stats(json), Ui.MUTED);
+		if (taskIsDone)
+		{
+			setStatus("Done for today! A new AFK task unlocks at midnight (Finnish time). " + stats(json), Ui.OK);
+		}
+		else
+		{
+			setStatus(stats(json), Ui.MUTED);
+		}
 	}
 
 	/** A Task, Boss or Collection log task (fresh roll or the stored current one). */
@@ -530,7 +537,8 @@ public class TasksTab extends JPanel
 		{
 			b.setEnabled(!busy);
 		}
-		roll.setEnabled(loggedIn && !busy);
+		// One AFK task a day: once it's done there's nothing to roll until midnight.
+		roll.setEnabled(loggedIn && !busy && !(category == Category.AFK && taskIsDone));
 		done.setEnabled(loggedIn && !busy && hasTask && !taskIsDone);
 		skip.setEnabled(loggedIn && !busy && hasTask && !taskIsDone);
 		already.setEnabled(loggedIn && !busy && hasTask && taskIsQuest);

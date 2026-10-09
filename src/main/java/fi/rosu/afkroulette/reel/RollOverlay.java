@@ -10,6 +10,7 @@ import java.awt.FontMetrics;
 import java.awt.Graphics2D;
 import java.awt.RenderingHints;
 import java.awt.Shape;
+import java.awt.geom.AffineTransform;
 import java.awt.image.BufferedImage;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -51,6 +52,9 @@ public class RollOverlay extends Overlay
 	/** Index of the rolled task on the reel: enough tiles before it for a long spin. */
 	private static final int WINNER_INDEX = LEAD + 30;
 	private static final long TICK_SOUND_GAP_MS = 70;
+	/** Drawn at up to twice the base size, shrunk to fit narrow (fixed mode) viewports. */
+	private static final double MAX_SCALE = 2.0;
+	private static final int VIEWPORT_MARGIN = 16;
 
 	private static final Color BACKGROUND = new Color(20, 18, 15, 225);
 	private static final Color TILE_COLOR = new Color(58, 52, 44);
@@ -182,9 +186,18 @@ public class RollOverlay extends Overlay
 
 		int width = VISIBLE * STEP + GAP;
 		int height = TILE + 70;
-		int centerX = client.getViewportXOffset() + client.getViewportWidth() / 2;
-		int x = centerX - width / 2;
-		int y = client.getViewportYOffset() + client.getViewportHeight() / 4 - height / 2;
+		double scale = Math.max(0.5, Math.min(MAX_SCALE,
+			(client.getViewportWidth() - 2 * VIEWPORT_MARGIN) / (double) width));
+		double screenX = client.getViewportXOffset() + (client.getViewportWidth() - width * scale) / 2;
+		double screenY = Math.max(client.getViewportYOffset() + VIEWPORT_MARGIN,
+			client.getViewportYOffset() + client.getViewportHeight() / 4.0 - height * scale / 2);
+		AffineTransform oldTransform = g.getTransform();
+		g.translate(screenX, screenY);
+		g.scale(scale, scale);
+		// From here on everything is drawn at base size with the box's top-left at (0, 0).
+		int centerX = width / 2;
+		int x = 0;
+		int y = 0;
 
 		g.setColor(BACKGROUND);
 		g.fillRoundRect(x, y, width, height, 10, 10);
@@ -233,6 +246,7 @@ public class RollOverlay extends Overlay
 			g.setFont(FontManager.getRunescapeBoldFont());
 			drawCentered(g, fit(g, s.result, width - 16), centerX, stripY + TILE + 24, Color.WHITE);
 		}
+		g.setTransform(oldTransform);
 		g.setComposite(oldComposite);
 		return null;
 	}
