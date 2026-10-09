@@ -227,9 +227,9 @@ public class RollOverlay extends Overlay
 			BufferedImage img = image(s, s.tiles.get(i));
 			if (img != null)
 			{
-				double scale = Math.min(ICON / (double) img.getWidth(), ICON / (double) img.getHeight());
-				int w = (int) Math.round(img.getWidth() * scale);
-				int h = (int) Math.round(img.getHeight() * scale);
+				double fitIcon = Math.min(ICON / (double) img.getWidth(), ICON / (double) img.getHeight());
+				int w = (int) Math.round(img.getWidth() * fitIcon);
+				int h = (int) Math.round(img.getHeight() * fitIcon);
 				g.drawImage(img, tileX + (TILE - w) / 2, stripY + (TILE - h) / 2, w, h, null);
 			}
 		}
