@@ -6,6 +6,7 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParseException;
 import fi.rosu.afkroulette.AfkRouletteConfig;
+import fi.rosu.afkroulette.AfkRoulettePlugin;
 import fi.rosu.afkroulette.ApiClient;
 import fi.rosu.afkroulette.PlayerState;
 import java.util.ArrayList;
@@ -32,6 +33,7 @@ import net.runelite.api.ItemContainer;
 import net.runelite.api.NPC;
 import net.runelite.api.Player;
 import net.runelite.api.Skill;
+import net.runelite.api.WorldType;
 import net.runelite.api.events.ActorDeath;
 import net.runelite.api.events.ChatMessage;
 import net.runelite.api.events.GameTick;
@@ -77,6 +79,8 @@ public class TaskTracker
 	/** Save progress at most this often (game ticks) so restarts don't lose it. */
 	private static final int SAVE_EVERY_TICKS = 10;
 	private static final String PROGRESS_KEY = "progress.";
+	/** Wait this long (game ticks, ~30 s) before retrying a failed completion. */
+	private static final int RETRY_TICKS = 50;
 
 	/** Change notification for the panel. Called on the client thread. */
 	public interface Listener
@@ -99,6 +103,17 @@ public class TaskTracker
 		volatile int progress;
 		Set<String> seen = new HashSet<>();
 		boolean completing;
+		/** Identity of this roll: the same task name can be rolled again later. */
+		String rollId;
+		/** Level tasks: level the player had when tracking started, and levels to gain. */
+		int levelBase;
+		int levelGain;
+		/** Quest tasks: whether the quest log has been checked since tracking started. */
+		boolean questChecked;
+		/** "done", or "already" for a quest that was finished before it was rolled. */
+		String completeAs = "done";
+		/** Game tick before which a failed completion is not retried. */
+		int retryAtTick;
 	}
 
 	private static final class PendingGain
@@ -133,6 +148,8 @@ public class TaskTracker
 	private Map<String, Integer> lastInventory;
 	private boolean dirty;
 	private int ticksSinceSave;
+	/** Bumped by reset(); server replies from an older generation are dropped. */
+	private volatile int generation;
 
 	@Inject
 	TaskTracker(Client client, ClientThread clientThread, ItemManager itemManager, ApiClient api,
@@ -187,6 +204,7 @@ public class TaskTracker
 			clientThread.invokeLater(() -> tracked.clear());
 			return;
 		}
+		int gen = generation;
 		Map<String, String> q = new HashMap<>();
 		q.put("nick", nick);
 		api.get("/api/afk/current", q, (json, error) ->
@@ -195,7 +213,7 @@ public class TaskTracker
 			{
 				boolean done = "done".equals(str(json, "status"));
 				JsonObject task = obj(json, "task");
-				clientThread.invokeLater(() -> apply("afk", done ? null : task));
+				clientThread.invokeLater(() -> applyIfCurrent(gen, "afk", done ? null : task));
 			}
 		});
 		for (String category : new String[]{"task", "boss", "collection"})
@@ -207,7 +225,7 @@ public class TaskTracker
 				if (error == null)
 				{
 					JsonObject task = obj(json, "active");
-					clientThread.invokeLater(() -> apply(category, task));
+					clientThread.invokeLater(() -> applyIfCurrent(gen, category, task));
 				}
 			});
 		}
@@ -216,6 +234,7 @@ public class TaskTracker
 	/** Forget everything (logout, plugin stop). Client thread. */
 	public void reset()
 	{
+		generation++;
 		tracked.clear();
 		lastXp.clear();
 		lastXpTick.clear();
@@ -241,15 +260,32 @@ public class TaskTracker
 		{
 			if ("quest".equals(t.type))
 			{
+				boolean finished = false;
 				for (Map.Entry<String, String> e : states.entrySet())
 				{
 					if (e.getKey().equalsIgnoreCase(t.quest) && "FINISHED".equals(e.getValue()))
 					{
-						t.progress = t.target;
-						maybeComplete(t);
+						finished = true;
 					}
 				}
+				if (finished)
+				{
+					// Finished already the first time we look: done before the roll, so it
+					// is marked "already done" instead of earning a completion.
+					t.completeAs = t.questChecked ? "done" : "already";
+					t.progress = t.target;
+					maybeComplete(t);
+				}
+				t.questChecked = true;
 			}
+		}
+	}
+
+	private void applyIfCurrent(int gen, String category, JsonObject task)
+	{
+		if (gen == generation)
+		{
+			apply(category, task);
 		}
 	}
 
@@ -257,23 +293,32 @@ public class TaskTracker
 	{
 		JsonObject verify = obj(task, "verify");
 		String name = task != null ? (str(task, "name") != null ? str(task, "name") : str(task, "task")) : null;
+		Tracked existing = tracked.get(category);
 		if (task == null || verify == null || name == null)
 		{
-			if (tracked.remove(category) != null)
+			if (existing != null)
 			{
+				tracked.remove(category);
+				clearProgress(existing);
 				notifyListeners(category, false);
 			}
 			return;
 		}
-		Tracked existing = tracked.get(category);
-		if (existing != null && existing.name.equals(name))
+		String rollId = name + "|" + nz(str(task, "rolled"));
+		if (existing != null && existing.rollId.equals(rollId))
 		{
 			return;
+		}
+		if (existing != null)
+		{
+			// A different roll replaced it (skip, Discord, website...): its progress is void.
+			clearProgress(existing);
 		}
 
 		Tracked t = new Tracked();
 		t.category = category;
 		t.name = name;
+		t.rollId = rollId;
 		t.type = str(verify, "type");
 		t.skill = lower(str(verify, "skill"));
 		t.target = verify.has("count") ? verify.get("count").getAsInt()
@@ -312,14 +357,28 @@ public class TaskTracker
 		{
 			return;
 		}
-		restoreProgress(t);
+		if ("level".equals(t.type))
+		{
+			int from = verify.has("from") ? verify.get("from").getAsInt() : t.target - 1;
+			t.levelGain = Math.max(1, t.target - from);
+			t.levelBase = from;
+		}
+		boolean restored = restoreProgress(t);
 		if ("level".equals(t.type) && t.skill != null)
 		{
 			Skill skill = skillByName(t.skill);
 			if (skill != null && client.getGameState() == GameState.LOGGED_IN)
 			{
-				t.progress = client.getRealSkillLevel(skill);
+				int real = client.getRealSkillLevel(skill);
+				if (!restored)
+				{
+					// The server's level may be stale (hiscores) or 1 for unranked skills.
+					t.levelBase = Math.max(t.levelBase, real);
+				}
+				t.progress = real;
 			}
+			t.target = Math.min(99, t.levelBase + t.levelGain);
+			dirty = true;
 		}
 		tracked.put(category, t);
 		notifyListeners(category, false);
@@ -329,6 +388,10 @@ public class TaskTracker
 	@Subscribe
 	public void onStatChanged(StatChanged event)
 	{
+		if (onIgnoredWorld())
+		{
+			return;
+		}
 		Skill skill = event.getSkill();
 		String skillName = lower(skill.getName());
 		Integer previous = lastXp.put(skill, event.getXp());
@@ -430,6 +493,10 @@ public class TaskTracker
 	@Subscribe
 	public void onChatMessage(ChatMessage event)
 	{
+		if (onIgnoredWorld())
+		{
+			return;
+		}
 		if (event.getType() != ChatMessageType.GAMEMESSAGE && event.getType() != ChatMessageType.SPAM)
 		{
 			return;
@@ -498,6 +565,10 @@ public class TaskTracker
 	@Subscribe
 	public void onActorDeath(ActorDeath event)
 	{
+		if (onIgnoredWorld())
+		{
+			return;
+		}
 		if (!(event.getActor() instanceof NPC))
 		{
 			return;
@@ -529,14 +600,17 @@ public class TaskTracker
 
 	private void maybeComplete(Tracked t)
 	{
-		if (t.completing || t.progress < t.target || player.getName() == null)
+		if (t.completing || t.progress < t.target || player.getName() == null || onIgnoredWorld()
+			|| client.getTickCount() < t.retryAtTick)
 		{
 			return;
 		}
 		t.completing = true;
 		Map<String, Object> body = new HashMap<>();
 		body.put("nick", player.getName());
-		body.put("status", "done");
+		body.put("status", t.completeAs);
+		// Names the task, so a stale view can't complete whatever is active now.
+		body.put("task", t.name);
 		String path = "/api/afk/complete";
 		if (!"afk".equals(t.category))
 		{
@@ -549,7 +623,12 @@ public class TaskTracker
 			{
 				log.debug("Auto-complete failed: {}", error);
 				t.completing = false;
-				refresh();
+				t.retryAtTick = client.getTickCount() + RETRY_TICKS;
+				if (json != null)
+				{
+					// The server answered (e.g. the task changed): re-read what's active.
+					refresh();
+				}
 				return;
 			}
 			tracked.remove(t.category, t);
@@ -567,33 +646,41 @@ public class TaskTracker
 		}));
 	}
 
-	private void restoreProgress(Tracked t)
+	/** @return true when saved progress for this exact roll was found */
+	private boolean restoreProgress(Tracked t)
 	{
 		String raw = configManager.getRSProfileConfiguration(AfkRouletteConfig.GROUP, PROGRESS_KEY + t.category);
 		if (raw == null)
 		{
-			return;
+			return false;
 		}
 		try
 		{
 			JsonObject saved = gson.fromJson(raw, JsonObject.class);
-			if (saved != null && t.name.equals(str(saved, "name")))
+			if (saved != null && t.rollId.equals(str(saved, "roll")))
 			{
 				t.progress = saved.has("progress") ? saved.get("progress").getAsInt() : 0;
 				t.seen.addAll(strings(saved, "seen"));
+				if (saved.has("base"))
+				{
+					t.levelBase = saved.get("base").getAsInt();
+				}
+				return true;
 			}
 		}
 		catch (JsonParseException | IllegalStateException | UnsupportedOperationException e)
 		{
 			log.debug("Bad saved progress for {}", t.category, e);
 		}
+		return false;
 	}
 
 	private void saveProgress(Tracked t)
 	{
 		JsonObject saved = new JsonObject();
-		saved.addProperty("name", t.name);
+		saved.addProperty("roll", t.rollId);
 		saved.addProperty("progress", t.progress);
+		saved.addProperty("base", t.levelBase);
 		JsonArray seen = new JsonArray();
 		t.seen.forEach(seen::add);
 		saved.add("seen", seen);
@@ -637,6 +724,24 @@ public class TaskTracker
 			}
 		}
 		return counts;
+	}
+
+	/** Leagues, Deadman etc. must not complete main-game tasks. */
+	private boolean onIgnoredWorld()
+	{
+		for (WorldType type : client.getWorldType())
+		{
+			if (AfkRoulettePlugin.IGNORED_WORLDS.contains(type))
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static String nz(String s)
+	{
+		return s == null ? "" : s;
 	}
 
 	private static Skill skillByName(String name)

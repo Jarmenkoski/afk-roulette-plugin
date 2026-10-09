@@ -73,6 +73,8 @@ public class TasksTab extends JPanel
 	private boolean taskIsDone;
 	private boolean taskIsQuest;
 	private boolean busy;
+	/** Status to show after the next card reload (e.g. after an automatic completion). */
+	private String pendingStatus;
 
 	@Inject
 	TasksTab(ApiClient api, PlayerState player, TaskTracker tracker)
@@ -194,6 +196,11 @@ public class TasksTab extends JPanel
 			{
 				showTask(json.getAsJsonObject("active"));
 				setStatus("Your current task — finish or skip it.", Ui.MUTED);
+			}
+			if (pendingStatus != null)
+			{
+				setStatus(pendingStatus, Ui.OK);
+				pendingStatus = null;
 			}
 			refreshButtons();
 		})));
@@ -380,8 +387,8 @@ public class TasksTab extends JPanel
 		if (completed && !busy)
 		{
 			// The game showed the task done: reload the card from the server.
+			pendingStatus = "Task completed automatically!";
 			select(category);
-			setStatus("Task completed automatically!", Ui.OK);
 		}
 		else if (hasTask)
 		{

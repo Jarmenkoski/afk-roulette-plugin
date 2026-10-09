@@ -123,6 +123,10 @@ public class GroupTab extends JPanel
 		group.refresh(() ->
 		{
 			refresh.setEnabled(true);
+			if (!inGroup())
+			{
+				return;
+			}
 			rebuildGroupBox();
 			render();
 		}, error ->
@@ -253,16 +257,27 @@ public class GroupTab extends JPanel
 			return;
 		}
 		String name = player.getName();
+		String token = config.groupToken().trim();
+		// Forget the token first so the uploader stops, then delete our data with it.
+		configManager.unsetConfiguration(AfkRouletteConfig.GROUP, TOKEN_KEY);
 		if (name == null)
 		{
-			configManager.unsetConfiguration(AfkRouletteConfig.GROUP, TOKEN_KEY);
 			return;
 		}
 		Map<String, Object> body = new HashMap<>();
 		body.put("name", name);
-		// Delete our data with the old token first, then forget the token.
-		api.post("/api/plugin/group/leave", body, (json, error) -> SwingUtilities.invokeLater(() ->
-			configManager.unsetConfiguration(AfkRouletteConfig.GROUP, TOKEN_KEY)));
+		api.post("/api/plugin/group/leave", body, token, (json, error) ->
+		{
+			if (error != null)
+			{
+				SwingUtilities.invokeLater(() ->
+				{
+					status.setForeground(Ui.ERROR);
+					status.setText(Ui.wrap("Left the group, but removing your data failed: " + error
+						+ ". Join again with the token and leave once more to retry."));
+				});
+			}
+		});
 	}
 
 	private static JTextField field(String tooltip)

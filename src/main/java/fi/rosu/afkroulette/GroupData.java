@@ -86,6 +86,7 @@ public class GroupData
 	private volatile long fetchedAtMillis;
 	@Getter
 	private volatile String groupName = "";
+	private volatile int requestSeq;
 
 	@Inject
 	GroupData(ApiClient api, ClientThread clientThread, ItemManager itemManager)
@@ -103,6 +104,7 @@ public class GroupData
 	/** Drop the cached snapshot, e.g. after leaving a group. */
 	public void clear()
 	{
+		requestSeq++;
 		members = Collections.emptyList();
 		groupName = "";
 		fetchedAtMillis = 0;
@@ -120,8 +122,13 @@ public class GroupData
 	 */
 	public void refresh(Runnable onDone, Consumer<String> onError)
 	{
+		int seq = ++requestSeq;
 		api.get("/api/plugin/group", null, (json, error) ->
 		{
+			if (seq != requestSeq)
+			{
+				return; // a newer refresh (or a group switch) superseded this one
+			}
 			if (error != null)
 			{
 				SwingUtilities.invokeLater(() -> onError.accept(error));

@@ -11,6 +11,7 @@ import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import javax.inject.Inject;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Client;
@@ -26,6 +27,7 @@ import net.runelite.api.events.GameTick;
 import net.runelite.api.events.ItemContainerChanged;
 import net.runelite.api.events.StatChanged;
 import net.runelite.api.gameval.InventoryID;
+import net.runelite.client.callback.ClientThread;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.EventBus;
 import net.runelite.client.eventbus.Subscribe;
@@ -46,13 +48,14 @@ import net.runelite.client.util.ImageUtil;
 )
 public class AfkRoulettePlugin extends Plugin
 {
+	private static final Set<String> USER_SETTINGS = Set.of("serverEnabled", "shareData", "groupToken");
 	private static final int INVENTORY_SLOTS = 28;
 	private static final int EQUIPMENT_SLOTS = 14;
 	/** Containers whose slot order matters (shown as grids); others are sent compacted. */
 	private static final int COMPACT = -1;
 
 	/** Leagues, Deadman etc. are separate accounts in practice; never mix them with the main game. */
-	private static final EnumSet<WorldType> IGNORED_WORLDS = EnumSet.of(
+	public static final EnumSet<WorldType> IGNORED_WORLDS = EnumSet.of(
 		WorldType.SEASONAL, WorldType.DEADMAN, WorldType.TOURNAMENT_WORLD,
 		WorldType.PVP_ARENA, WorldType.BETA_WORLD, WorldType.QUEST_SPEEDRUNNING);
 
@@ -70,6 +73,8 @@ public class AfkRoulettePlugin extends Plugin
 	private TaskTracker tracker;
 	@Inject
 	private EventBus eventBus;
+	@Inject
+	private ClientThread clientThread;
 
 	private AfkRoulettePanel panel;
 	private NavigationButton navButton;
@@ -100,7 +105,7 @@ public class AfkRoulettePlugin extends Plugin
 	protected void shutDown()
 	{
 		eventBus.unregister(tracker);
-		tracker.reset();
+		clientThread.invoke(tracker::reset);
 		clientToolbar.removeNavigation(navButton);
 		navButton = null;
 		panel = null;
@@ -195,7 +200,10 @@ public class AfkRoulettePlugin extends Plugin
 	@Subscribe
 	public void onConfigChanged(ConfigChanged event)
 	{
-		if (AfkRouletteConfig.GROUP.equals(event.getGroup()) && panel != null)
+		// Only the user's settings: the tracker's own progress saves (RS-profile keys
+		// in the same group) must not reload everything.
+		if (AfkRouletteConfig.GROUP.equals(event.getGroup()) && panel != null
+			&& USER_SETTINGS.contains(event.getKey()))
 		{
 			sync.resendAll();
 			tracker.refresh();
@@ -208,6 +216,11 @@ public class AfkRoulettePlugin extends Plugin
 	public void refreshQuests()
 	{
 		collectQuests();
+		// Picks up tasks rolled, skipped or finished on Discord or the website.
+		if (trackedName() != null)
+		{
+			tracker.refresh();
+		}
 	}
 
 	@Schedule(period = 2, unit = ChronoUnit.SECONDS, asynchronous = true)

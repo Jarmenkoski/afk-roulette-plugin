@@ -73,8 +73,14 @@ public class ApiClient
 
 	public void post(String path, Object body, Callback cb)
 	{
+		post(path, body, null, cb);
+	}
+
+	/** POST with an explicit group token instead of the configured one. */
+	public void post(String path, Object body, String tokenOverride, Callback cb)
+	{
 		RequestBody requestBody = RequestBody.create(JSON, gson.toJson(body));
-		send(new Request.Builder().url(BASE_URL + path).post(requestBody), null, cb);
+		send(new Request.Builder().url(BASE_URL + path).post(requestBody), tokenOverride, cb);
 	}
 
 	private void send(Request.Builder request, String tokenOverride, Callback cb)
