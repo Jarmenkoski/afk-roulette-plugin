@@ -30,7 +30,7 @@ Nothing is sent until you turn on **Connect to AFK Roulette server** (off by def
 - **With the server on:** your IP address, your RuneScape name and your task results (completions and skips, which the plugin derives from xp drops, kill counts, collection log, diary and quest messages).
 - **With "Share my data with the group" on, additionally:** your levels, xp, quest states, inventory, equipment, bank, seed vault, current world and an online heartbeat.
 
-Shared data can only be read by people with your group's token. Turning sharing off, or pressing **Leave group** (or switching to another group token), removes your shared data from the group.
+Shared data can only be read by people with your group's token. Turning sharing off (or switching to another group token) removes your shared data from the group; your tasks and streaks there stay. **Leave group** also removes your task history in a group made in the plugin. Turn sharing off before turning the server connection off: with the connection off the plugin doesn't contact the server at all. Privacy policy: https://afk.rosu.fi/privacy.html
 
 See the [privacy policy](https://afk.rosu.fi/privacy.html) for how the data is stored and used.
 

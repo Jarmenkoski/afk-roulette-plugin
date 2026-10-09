@@ -75,7 +75,7 @@ public class TaskTracker
 		"^Congratulations!.*completed all of the (easy|medium|hard|elite) tasks in the (.+?) area", Pattern.CASE_INSENSITIVE);
 
 	/** Save progress at most this often (game ticks, ~1 minute); also saved on logout and completion. */
-	private static final int SAVE_EVERY_TICKS = 100;
+	private static final int SAVE_EVERY_TICKS = 20;
 	private static final String PROGRESS_KEY = "progress.";
 	/** Wait this long (game ticks, ~30 s) before retrying a failed completion. */
 	private static final int RETRY_TICKS = 50;
@@ -237,12 +237,26 @@ public class TaskTracker
 	}
 
 	/**
-	 * Like {@link #reset()} for a changed RS profile: the config now points at the new profile,
-	 * so the old profile's unsaved progress must not be written to it. Client thread.
+	 * Like {@link #reset()} for a changed RS profile: the config already points at the new
+	 * profile, so unsaved progress is written to the previous one by its key. Client thread.
 	 */
-	public void resetForNewProfile()
+	public void resetForNewProfile(String previousProfile)
 	{
+		if (dirty && previousProfile != null)
+		{
+			for (Tracked t : tracked.values())
+			{
+				configManager.setConfiguration(AfkRouletteConfig.GROUP, previousProfile,
+					PROGRESS_KEY + t.category, gson.toJson(progressJson(t)));
+			}
+		}
 		clearState();
+	}
+
+	/** Write unsaved progress now (client closing). Any thread. */
+	public void saveNow()
+	{
+		saveAll();
 	}
 
 	private void clearState()
@@ -727,6 +741,12 @@ public class TaskTracker
 
 	private void saveProgress(Tracked t)
 	{
+		configManager.setRSProfileConfiguration(AfkRouletteConfig.GROUP, PROGRESS_KEY + t.category,
+			gson.toJson(progressJson(t)));
+	}
+
+	private static JsonObject progressJson(Tracked t)
+	{
 		JsonObject saved = new JsonObject();
 		saved.addProperty("roll", t.rollId);
 		saved.addProperty("progress", t.progress);
@@ -735,7 +755,7 @@ public class TaskTracker
 		JsonArray seen = new JsonArray();
 		t.seen.forEach(seen::add);
 		saved.add("seen", seen);
-		configManager.setRSProfileConfiguration(AfkRouletteConfig.GROUP, PROGRESS_KEY + t.category, gson.toJson(saved));
+		return saved;
 	}
 
 	private void clearProgress(Tracked t)

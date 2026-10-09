@@ -32,6 +32,8 @@ import net.runelite.client.config.RuneScapeProfileType;
 import net.runelite.client.eventbus.EventBus;
 import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.events.ConfigChanged;
+import net.runelite.client.events.ClientShutdown;
+import net.runelite.client.events.ProfileChanged;
 import net.runelite.client.events.RuneScapeProfileChanged;
 import net.runelite.client.game.ItemManager;
 import net.runelite.client.plugins.Plugin;
@@ -80,11 +82,15 @@ public class AfkRoulettePlugin extends Plugin
 	private OverlayManager overlayManager;
 	@Inject
 	private RollOverlay rollOverlay;
+	@Inject
+	private ConfigManager configManager;
 
 	private AfkRoulettePanel panel;
 	private NavigationButton navButton;
 	/** Game ticks until a full quest/skill snapshot is taken after login. */
 	private int snapshotInTicks = -1;
+	/** The RuneLite config profile in use: switching profiles is not the user changing settings. */
+	private long configProfileId;
 
 	@Override
 	protected void startUp()
@@ -99,6 +105,7 @@ public class AfkRoulettePlugin extends Plugin
 			.build();
 		clientToolbar.addNavigation(navButton);
 		overlayManager.add(rollOverlay);
+		configProfileId = currentConfigProfileId();
 		eventBus.register(tracker);
 
 		if (client.getGameState() == GameState.LOGGED_IN)
@@ -234,22 +241,55 @@ public class AfkRoulettePlugin extends Plugin
 	@Subscribe
 	public void onRuneScapeProfileChanged(RuneScapeProfileChanged event)
 	{
-		// Saved task progress is per RS profile: start over on the new one and re-baseline.
-		tracker.resetForNewProfile();
-		snapshotInTicks = 2;
+		// May be posted from any thread; the tracker lives on the client thread.
+		String previous = event.getPreviousProfile();
+		clientThread.invoke(() ->
+		{
+			// Logging in (no previous profile) is handled by the login snapshot.
+			if (previous == null)
+			{
+				return;
+			}
+			// Saved task progress is per RS profile: keep the old one's, start over and re-baseline.
+			tracker.resetForNewProfile(previous);
+			snapshotInTicks = 2;
+			tracker.refresh();
+		});
+	}
+
+	@Subscribe
+	public void onProfileChanged(ProfileChanged event)
+	{
+		configProfileId = currentConfigProfileId();
+	}
+
+	@Subscribe
+	public void onClientShutdown(ClientShutdown event)
+	{
+		tracker.saveNow();
+	}
+
+	private long currentConfigProfileId()
+	{
+		return configManager.getProfile() == null ? 0 : configManager.getProfile().getId();
 	}
 
 	/**
-	 * Sharing turned off, or the group token replaced: the data already uploaded under the
-	 * old token is removed from that group (fire and forget).
+	 * Sharing turned off, or the group token replaced: the snapshot already uploaded under the
+	 * old token is removed from that group (fire and forget). Tasks and streaks there stay.
 	 */
 	private void removeSharedDataIfStopped(ConfigChanged event)
 	{
+		// A RuneLite profile switch also reports every differing setting as changed.
+		if (currentConfigProfileId() != configProfileId)
+		{
+			return;
+		}
 		if ("shareData".equals(event.getKey()))
 		{
 			if (Boolean.parseBoolean(event.getOldValue()) && !Boolean.parseBoolean(event.getNewValue()))
 			{
-				leaver.leave(config.groupToken());
+				leaver.leave(config.groupToken(), true);
 			}
 		}
 		else if ("groupToken".equals(event.getKey()))
@@ -258,7 +298,7 @@ public class AfkRoulettePlugin extends Plugin
 			String newToken = event.getNewValue() == null ? "" : event.getNewValue().trim();
 			if (!oldToken.isEmpty() && !oldToken.equals(newToken))
 			{
-				leaver.leave(oldToken);
+				leaver.leave(oldToken, true);
 			}
 		}
 	}

@@ -38,6 +38,10 @@ public class SyncManager
 	private final AfkRouletteConfig config;
 	private boolean inFlight;
 	private int skipRounds;
+	/** The name the last successful upload went out under (the group knows the data by it). */
+	private volatile String lastUploadedName;
+	/** Work that must wait for the upload in flight, e.g. removing the data from the group. */
+	private final List<Runnable> whenIdle = new ArrayList<>();
 
 	@Inject
 	SyncManager(ApiClient api, AfkRouletteConfig config)
@@ -118,23 +122,52 @@ public class SyncManager
 	}
 
 	/** Ends an upload round; on failure the taken fields are queued again. */
-	private synchronized void finish(List<String> taken, String playerName, String error)
+	private void finish(List<String> taken, String playerName, String error)
 	{
-		inFlight = false;
-		if (error == null)
+		List<Runnable> run;
+		synchronized (this)
 		{
-			return;
-		}
-		log.debug("Group sync failed: {}", error);
-		skipRounds = BACKOFF_ROUNDS;
-		for (String key : taken)
-		{
-			Entry e = entries.get(key);
-			if (e != null && e.pending == null && playerName.equals(e.owner))
+			inFlight = false;
+			if (error == null)
 			{
-				e.pending = e.last;
+				lastUploadedName = playerName;
+			}
+			else
+			{
+				log.debug("Group sync failed: {}", error);
+				skipRounds = BACKOFF_ROUNDS;
+				for (String key : taken)
+				{
+					Entry e = entries.get(key);
+					if (e != null && e.pending == null && playerName.equals(e.owner))
+					{
+						e.pending = e.last;
+					}
+				}
+			}
+			run = new ArrayList<>(whenIdle);
+			whenIdle.clear();
+		}
+		run.forEach(Runnable::run);
+	}
+
+	/** Runs {@code task} now, or once the upload in flight has finished. */
+	public void runWhenIdle(Runnable task)
+	{
+		synchronized (this)
+		{
+			if (inFlight)
+			{
+				whenIdle.add(task);
+				return;
 			}
 		}
+		task.run();
+	}
+
+	public String lastUploadedName()
+	{
+		return lastUploadedName;
 	}
 
 	/** Send everything again, e.g. after the token or the share toggle changes. */
@@ -144,14 +177,20 @@ public class SyncManager
 		{
 			e.pending = e.last;
 		}
-		inFlight = false;
 		skipRounds = 0;
 	}
 
-	public synchronized void reset()
+	public void reset()
 	{
-		entries.clear();
-		inFlight = false;
-		skipRounds = 0;
+		List<Runnable> run;
+		synchronized (this)
+		{
+			entries.clear();
+			inFlight = false;
+			skipRounds = 0;
+			run = new ArrayList<>(whenIdle);
+			whenIdle.clear();
+		}
+		run.forEach(Runnable::run);
 	}
 }

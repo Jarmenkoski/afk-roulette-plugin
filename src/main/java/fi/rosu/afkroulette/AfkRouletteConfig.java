@@ -9,7 +9,7 @@ public interface AfkRouletteConfig extends Config
 {
 	String GROUP = "afkroulette";
 	String PRIVACY_URL = "https://afk.rosu.fi/privacy.html";
-	String SERVER_WARNING ="This feature submits your IP address to a 3rd-party server not controlled or verified by RuneLite developers";
+	String SERVER_WARNING = "This feature submits your IP address to a 3rd-party server not controlled or verified by RuneLite developers";
 
 	@ConfigItem(
 		keyName = "serverEnabled",

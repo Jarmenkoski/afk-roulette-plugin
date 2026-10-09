@@ -90,8 +90,7 @@ public class GroupTab extends JPanel
 		leaver.setFailureListener(error -> SwingUtilities.invokeLater(() ->
 		{
 			status.setForeground(Ui.ERROR);
-			status.setText(Ui.wrap("Left the group, but removing your data failed: " + error
-				+ ". Join again with the token and leave once more to retry."));
+			status.setText(Ui.wrap(error));
 		}));
 
 		setLayout(new DynamicGridLayout(0, 1, 0, 8));
@@ -288,7 +287,7 @@ public class GroupTab extends JPanel
 		String token = config.groupToken().trim();
 		// Forget the token first so the uploader stops, then delete our data with it.
 		configManager.unsetConfiguration(AfkRouletteConfig.GROUP, TOKEN_KEY);
-		leaver.leave(token);
+		leaver.leave(token, false);
 	}
 
 	/** Strips whitespace (incl. non-breaking) and zero-width characters from a pasted token. */
