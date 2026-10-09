@@ -27,7 +27,6 @@ import javax.inject.Singleton;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.ChatMessageType;
 import net.runelite.api.Client;
-import net.runelite.api.GameState;
 import net.runelite.api.Item;
 import net.runelite.api.ItemContainer;
 import net.runelite.api.NPC;
@@ -276,7 +275,11 @@ public class TaskTracker
 					t.progress = t.target;
 					maybeComplete(t);
 				}
-				t.questChecked = true;
+				if (!t.questChecked)
+				{
+					t.questChecked = true;
+					dirty = true;
+				}
 			}
 		}
 	}
@@ -307,6 +310,9 @@ public class TaskTracker
 		String rollId = name + "|" + nz(str(task, "rolled"));
 		if (existing != null && existing.rollId.equals(rollId))
 		{
+			// Same roll: nothing to re-read, but retry a completion that failed earlier
+			// (levels, diaries and clog items won't produce another event to retry on).
+			maybeComplete(existing);
 			return;
 		}
 		if (existing != null)
@@ -367,7 +373,7 @@ public class TaskTracker
 		if ("level".equals(t.type) && t.skill != null)
 		{
 			Skill skill = skillByName(t.skill);
-			if (skill != null && client.getGameState() == GameState.LOGGED_IN)
+			if (skill != null && client.getLocalPlayer() != null)
 			{
 				int real = client.getRealSkillLevel(skill);
 				if (!restored)
@@ -556,6 +562,7 @@ public class TaskTracker
 				if ("diary".equals(t.type) && tier.equals(t.tier) && region.equals(t.region))
 				{
 					t.progress = t.target;
+					dirty = true;
 					maybeComplete(t);
 				}
 			}
@@ -665,6 +672,7 @@ public class TaskTracker
 				{
 					t.levelBase = saved.get("base").getAsInt();
 				}
+				t.questChecked = saved.has("qc") && saved.get("qc").getAsBoolean();
 				return true;
 			}
 		}
@@ -681,6 +689,7 @@ public class TaskTracker
 		saved.addProperty("roll", t.rollId);
 		saved.addProperty("progress", t.progress);
 		saved.addProperty("base", t.levelBase);
+		saved.addProperty("qc", t.questChecked);
 		JsonArray seen = new JsonArray();
 		t.seen.forEach(seen::add);
 		saved.add("seen", seen);

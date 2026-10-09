@@ -145,9 +145,18 @@ public class GroupData
 				SwingUtilities.invokeLater(() -> onError.accept("Could not read the group data"));
 				return;
 			}
-			members = parsed;
-			groupName = json.has("name") && !json.get("name").isJsonNull() ? json.get("name").getAsString() : "";
-			fetchedAtMillis = System.currentTimeMillis();
+			String name = json.has("name") && !json.get("name").isJsonNull() ? json.get("name").getAsString() : "";
+			Runnable publish = () ->
+			{
+				if (seq != requestSeq)
+				{
+					return; // the user left or switched groups meanwhile
+				}
+				members = parsed;
+				groupName = name;
+				fetchedAtMillis = System.currentTimeMillis();
+				onDone.run();
+			};
 
 			Set<Integer> missing = new HashSet<>();
 			for (Member m : parsed)
@@ -166,7 +175,7 @@ public class GroupData
 			}
 			if (missing.isEmpty())
 			{
-				SwingUtilities.invokeLater(onDone);
+				SwingUtilities.invokeLater(publish);
 				return;
 			}
 			// Item compositions may only be read on the client thread.
@@ -189,7 +198,7 @@ public class GroupData
 				}
 				finally
 				{
-					SwingUtilities.invokeLater(onDone);
+					SwingUtilities.invokeLater(publish);
 				}
 			});
 		});

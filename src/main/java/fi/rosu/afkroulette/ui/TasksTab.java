@@ -75,6 +75,8 @@ public class TasksTab extends JPanel
 	private boolean busy;
 	/** Status to show after the next card reload (e.g. after an automatic completion). */
 	private String pendingStatus;
+	/** Name of the task on the card, sent with Done/Skip so a stale card can't finish another task. */
+	private String shownTaskName;
 
 	@Inject
 	TasksTab(ApiClient api, PlayerState player, TaskTracker tracker)
@@ -231,6 +233,10 @@ public class TasksTab extends JPanel
 		Map<String, Object> body = new HashMap<>();
 		body.put("nick", player.getName());
 		body.put("status", result);
+		if (shownTaskName != null)
+		{
+			body.put("task", shownTaskName);
+		}
 		String path = "/api/tasker/complete";
 		if (category == Category.AFK)
 		{
@@ -307,6 +313,7 @@ public class TasksTab extends JPanel
 			return;
 		}
 		JsonObject t = json.getAsJsonObject("task");
+		shownTaskName = str(t, "name");
 		taskIsDone = "done".equals(str(json, "status"));
 		taskIsQuest = false;
 		hasTask = true;
@@ -339,6 +346,7 @@ public class TasksTab extends JPanel
 	private void showTask(JsonObject t)
 	{
 		String name = str(t, "name") != null ? str(t, "name") : str(t, "task");
+		shownTaskName = name;
 		taskIsDone = false;
 		taskIsQuest = name != null && name.startsWith(QUEST_PREFIX);
 		hasTask = true;
@@ -367,6 +375,7 @@ public class TasksTab extends JPanel
 
 	private void clearCard(String message)
 	{
+		shownTaskName = null;
 		hasTask = false;
 		taskIsDone = false;
 		taskIsQuest = false;
