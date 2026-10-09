@@ -236,6 +236,19 @@ public class AfkRoulettePlugin extends Plugin
 		sync.update(name, "quests", quests);
 		sync.update(name, "world", client.getWorld());
 		sync.update(name, "heartbeat", System.currentTimeMillis() / 60_000);
+
+		// Container events only fire on change; read them directly too, so a plugin
+		// started mid-session (or events that came before login finished) still sync.
+		ItemContainer inventory = client.getItemContainer(InventoryID.INV);
+		if (inventory != null)
+		{
+			sync.update(name, "inventory", flatItems(inventory, INVENTORY_SLOTS));
+		}
+		ItemContainer worn = client.getItemContainer(InventoryID.WORN);
+		if (worn != null)
+		{
+			sync.update(name, "equipment", flatItems(worn, EQUIPMENT_SLOTS));
+		}
 	}
 
 	/** The player whose data may be collected right now, or null. */

@@ -4,7 +4,6 @@ import fi.rosu.afkroulette.GroupData;
 import java.awt.BorderLayout;
 import java.awt.Cursor;
 import java.awt.Dimension;
-import java.awt.FlowLayout;
 import java.awt.GridLayout;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
@@ -172,7 +171,7 @@ public class GroupTab extends JPanel
 		if (hasItems(worn))
 		{
 			d.add(Ui.label("Equipment", Ui.MUTED, false));
-			JPanel gear = new JPanel(new FlowLayout(FlowLayout.LEFT, 2, 2));
+			JPanel gear = new JPanel(new GridLayout(0, 4, 2, 2));
 			gear.setOpaque(false);
 			addItems(gear, worn, false);
 			d.add(gear);

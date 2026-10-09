@@ -16,6 +16,7 @@ import javax.inject.Inject;
 import javax.inject.Singleton;
 import javax.swing.SwingUtilities;
 import lombok.Getter;
+import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Experience;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.game.ItemManager;
@@ -23,6 +24,7 @@ import net.runelite.client.game.ItemManager;
 /**
  * Latest snapshot of the group's shared data, used by the Group and Items tabs.
  */
+@Slf4j
 @Singleton
 public class GroupData
 {
@@ -115,7 +117,17 @@ public class GroupData
 				SwingUtilities.invokeLater(() -> onError.accept(error));
 				return;
 			}
-			List<Member> parsed = parse(json);
+			List<Member> parsed;
+			try
+			{
+				parsed = parse(json);
+			}
+			catch (RuntimeException e)
+			{
+				log.debug("Bad group data", e);
+				SwingUtilities.invokeLater(() -> onError.accept("Could not read the group data"));
+				return;
+			}
 			members = parsed;
 			fetchedAtMillis = System.currentTimeMillis();
 
@@ -142,11 +154,25 @@ public class GroupData
 			// Item compositions may only be read on the client thread.
 			clientThread.invokeLater(() ->
 			{
-				for (int id : missing)
+				try
 				{
-					names.put(id, itemManager.getItemComposition(id).getName());
+					for (int id : missing)
+					{
+						// Ids come from other members' clients; one unknown id must not stop the rest.
+						try
+						{
+							names.put(id, itemManager.getItemComposition(id).getName());
+						}
+						catch (RuntimeException e)
+						{
+							log.debug("Unknown item id {}", id, e);
+						}
+					}
 				}
-				SwingUtilities.invokeLater(onDone);
+				finally
+				{
+					SwingUtilities.invokeLater(onDone);
+				}
 			});
 		});
 	}
@@ -188,7 +214,8 @@ public class GroupData
 				}
 			}
 
-			long ago = Math.max(0, Math.round(now - m.get("updated_at").getAsDouble()));
+			double updatedAt = m.has("updated_at") ? m.get("updated_at").getAsDouble() : now;
+			long ago = Math.max(0, Math.round(now - updatedAt));
 			out.add(new Member(m.get("nick").getAsString(), ago, levels, containers));
 		}
 		return out;

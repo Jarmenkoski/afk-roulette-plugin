@@ -130,11 +130,17 @@ public class TasksTab extends JPanel
 	/** Called when the logged-in character changes (or logs in). */
 	public void onPlayerChanged()
 	{
+		busy = false;
 		select(category);
 	}
 
 	private void select(Category c)
 	{
+		// A reply always belongs to the category it was requested for.
+		if (busy)
+		{
+			return;
+		}
 		category = c;
 		for (Map.Entry<Category, JButton> e : categoryButtons.entrySet())
 		{
@@ -270,6 +276,11 @@ public class TasksTab extends JPanel
 
 	private void showAfk(JsonObject json)
 	{
+		if (json == null || !json.has("task") || !json.get("task").isJsonObject())
+		{
+			clearCard("No task.");
+			return;
+		}
 		JsonObject t = json.getAsJsonObject("task");
 		taskIsDone = "done".equals(str(json, "status"));
 		taskIsQuest = false;
