@@ -29,7 +29,7 @@ import net.runelite.client.ui.DynamicGridLayout;
 import net.runelite.client.util.LinkBrowser;
 
 /**
- * Roll / Done / Skip for the daily AFK task and the Task, Boss and Collection
+ * Roll / Done / Skip for AFK tasks and the Task, Boss and Collection
  * log generators. Uses the same server endpoints as the website and Discord,
  * so tasks, streaks and highscores are shared everywhere.
  */
@@ -180,9 +180,9 @@ public class TasksTab extends JPanel
 		{
 			e.getValue().setBackground(e.getKey() == c ? ColorScheme.BRAND_ORANGE : ColorScheme.DARKER_GRAY_COLOR);
 		}
-		roll.setText(c == Category.AFK ? "Today's task" : "Roll");
+		roll.setText(c == Category.AFK ? "Roll AFK task" : "Roll");
 		clearCard(c == Category.AFK
-			? "Your daily AFK task: the best xp/h AFK method in a random skill."
+			? "AFK task: the best xp/h AFK method in a random skill. Roll as many as you like; one done a day keeps your streak."
 			: "No task yet.");
 		setStatus("", Ui.MUTED);
 		if (player.getName() != null)
@@ -427,7 +427,7 @@ public class TasksTab extends JPanel
 		updateProgress();
 		if (taskIsDone)
 		{
-			setStatus("Done for today! A new AFK task unlocks at midnight (Finnish time). " + stats(json), Ui.OK);
+			setStatus("Task done! Roll another one whenever you like. " + stats(json), Ui.OK);
 		}
 		else
 		{
@@ -537,8 +537,7 @@ public class TasksTab extends JPanel
 		{
 			b.setEnabled(!busy);
 		}
-		// One AFK task a day: once it's done there's nothing to roll until midnight.
-		roll.setEnabled(loggedIn && !busy && !(category == Category.AFK && taskIsDone));
+		roll.setEnabled(loggedIn && !busy);
 		done.setEnabled(loggedIn && !busy && hasTask && !taskIsDone);
 		skip.setEnabled(loggedIn && !busy && hasTask && !taskIsDone);
 		already.setEnabled(loggedIn && !busy && hasTask && taskIsQuest);

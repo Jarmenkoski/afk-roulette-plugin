@@ -2,7 +2,7 @@
 
 A RuneLite plugin for groups that play together (built for a Group Ironman team):
 
-- **Tasks** — roll your daily AFK task (the best xp/h AFK method you can do in a random skill), or a skill, boss or collection log task matched to your levels. Most tasks **complete automatically** from what happens in game: xp drops, kill counts, collection log notifications, diary completions, kills and your quest log. Done/Skip are tracked, with streaks and group highscores. Each roll spins a case-opening style reel over the game view: skill icons for skill tasks, boss pets for boss tasks and collection log items for log tasks (turn it or its sounds off in the config).
+- **Tasks** — roll AFK tasks (the best xp/h AFK method you can do in a random skill; as many as you like, one done a day keeps your streak), or a skill, boss or collection log task matched to your levels. Most tasks **complete automatically** from what happens in game: xp drops, kill counts, collection log notifications, diary completions, kills and your quest log. Done/Skip are tracked, with streaks and group highscores. Each roll spins a case-opening style reel over the game view: skill icons for skill tasks, boss pets for boss tasks and collection log items for log tasks (turn it or its sounds off in the config).
 - **Group** — create or join a group, then see your members' levels, worn gear and inventory.
 - **Items** — search every member's bank, inventory, gear and seed vault at once (e.g. "lobster" shows Lobster and Raw lobster per member).
 
