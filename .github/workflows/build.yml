@@ -4,6 +4,9 @@ on:
   push:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -22,7 +25,9 @@ jobs:
           path: build/libs/afk-roulette-0.1.0.jar
       # RuneLite client + plugin in one jar, for testing in-game before the
       # plugin is on the Plugin Hub (the launcher-started client can't sideload).
+      # Only on a manual run: it is ~26 MB and not needed for every push.
       - name: Upload test client
+        if: github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v4
         with:
           name: afk-roulette-test-client

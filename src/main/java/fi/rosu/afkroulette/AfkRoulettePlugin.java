@@ -8,7 +8,6 @@ import fi.rosu.afkroulette.ui.AfkRoulettePanel;
 import java.awt.image.BufferedImage;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
-import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -22,7 +21,6 @@ import net.runelite.api.ItemContainer;
 import net.runelite.api.Player;
 import net.runelite.api.Quest;
 import net.runelite.api.Skill;
-import net.runelite.api.WorldType;
 import net.runelite.api.events.GameStateChanged;
 import net.runelite.api.events.GameTick;
 import net.runelite.api.events.ItemContainerChanged;
@@ -30,9 +28,11 @@ import net.runelite.api.events.StatChanged;
 import net.runelite.api.gameval.InventoryID;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.config.ConfigManager;
+import net.runelite.client.config.RuneScapeProfileType;
 import net.runelite.client.eventbus.EventBus;
 import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.events.ConfigChanged;
+import net.runelite.client.events.RuneScapeProfileChanged;
 import net.runelite.client.game.ItemManager;
 import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
@@ -56,13 +56,12 @@ public class AfkRoulettePlugin extends Plugin
 	/** Containers whose slot order matters (shown as grids); others are sent compacted. */
 	private static final int COMPACT = -1;
 
-	/** Leagues, Deadman etc. are separate accounts in practice; never mix them with the main game. */
-	public static final EnumSet<WorldType> IGNORED_WORLDS = EnumSet.of(
-		WorldType.SEASONAL, WorldType.DEADMAN, WorldType.TOURNAMENT_WORLD,
-		WorldType.PVP_ARENA, WorldType.BETA_WORLD, WorldType.QUEST_SPEEDRUNNING);
-
 	@Inject
 	private Client client;
+	@Inject
+	private AfkRouletteConfig config;
+	@Inject
+	private GroupLeaver leaver;
 	@Inject
 	private ClientToolbar clientToolbar;
 	@Inject
@@ -182,6 +181,10 @@ public class AfkRoulettePlugin extends Plugin
 	@Subscribe
 	public void onItemContainerChanged(ItemContainerChanged event)
 	{
+		if (!sharing())
+		{
+			return;
+		}
 		String name = trackedName();
 		if (name == null)
 		{
@@ -215,9 +218,48 @@ public class AfkRoulettePlugin extends Plugin
 		if (AfkRouletteConfig.GROUP.equals(event.getGroup()) && panel != null
 			&& USER_SETTINGS.contains(event.getKey()))
 		{
+			removeSharedDataIfStopped(event);
 			sync.resendAll();
 			tracker.refresh();
 			panel.onConfigChanged();
+			// Nothing is collected while sharing is off, so take a fresh snapshot when it turns on.
+			clientThread.invokeLater(() ->
+			{
+				collectSkills();
+				collectQuests();
+			});
+		}
+	}
+
+	@Subscribe
+	public void onRuneScapeProfileChanged(RuneScapeProfileChanged event)
+	{
+		// Saved task progress is per RS profile: start over on the new one and re-baseline.
+		tracker.resetForNewProfile();
+		snapshotInTicks = 2;
+	}
+
+	/**
+	 * Sharing turned off, or the group token replaced: the data already uploaded under the
+	 * old token is removed from that group (fire and forget).
+	 */
+	private void removeSharedDataIfStopped(ConfigChanged event)
+	{
+		if ("shareData".equals(event.getKey()))
+		{
+			if (Boolean.parseBoolean(event.getOldValue()) && !Boolean.parseBoolean(event.getNewValue()))
+			{
+				leaver.leave(config.groupToken());
+			}
+		}
+		else if ("groupToken".equals(event.getKey()))
+		{
+			String oldToken = event.getOldValue() == null ? "" : event.getOldValue().trim();
+			String newToken = event.getNewValue() == null ? "" : event.getNewValue().trim();
+			if (!oldToken.isEmpty() && !oldToken.equals(newToken))
+			{
+				leaver.leave(oldToken);
+			}
 		}
 	}
 
@@ -239,8 +281,18 @@ public class AfkRoulettePlugin extends Plugin
 		sync.submit(player.getName());
 	}
 
+	/** Whether anything may be uploaded: the server is on and the player chose to share. */
+	private boolean sharing()
+	{
+		return config.serverEnabled() && config.shareData();
+	}
+
 	private void collectSkills()
 	{
+		if (!sharing())
+		{
+			return;
+		}
 		String name = trackedName();
 		if (name == null)
 		{
@@ -259,6 +311,11 @@ public class AfkRoulettePlugin extends Plugin
 
 	private void collectQuests()
 	{
+		// The tracker reads the quest log whenever the server is on; only uploading needs sharing.
+		if (!config.serverEnabled())
+		{
+			return;
+		}
 		String name = trackedName();
 		if (name == null)
 		{
@@ -269,8 +326,12 @@ public class AfkRoulettePlugin extends Plugin
 		{
 			quests.put(quest.getName(), quest.getState(client).name());
 		}
-		sync.update(name, "quests", quests);
 		tracker.onQuestStates(quests);
+		if (!config.shareData())
+		{
+			return;
+		}
+		sync.update(name, "quests", quests);
 		sync.update(name, "world", client.getWorld());
 		sync.update(name, "heartbeat", System.currentTimeMillis() / 60_000);
 
@@ -295,12 +356,10 @@ public class AfkRoulettePlugin extends Plugin
 		{
 			return null;
 		}
-		for (WorldType type : client.getWorldType())
+		// Leagues, Deadman etc. are separate accounts in practice; never mix them with the main game.
+		if (RuneScapeProfileType.getCurrent(client) != RuneScapeProfileType.STANDARD)
 		{
-			if (IGNORED_WORLDS.contains(type))
-			{
-				return null;
-			}
+			return null;
 		}
 		return PlayerState.normalize(client.getLocalPlayer().getName());
 	}

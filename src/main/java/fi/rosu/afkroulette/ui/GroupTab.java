@@ -1,11 +1,12 @@
 package fi.rosu.afkroulette.ui;
 
+import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import fi.rosu.afkroulette.AfkRouletteConfig;
 import fi.rosu.afkroulette.ApiClient;
 import fi.rosu.afkroulette.GroupData;
-import fi.rosu.afkroulette.PlayerState;
+import fi.rosu.afkroulette.GroupLeaver;
 import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Cursor;
@@ -67,7 +68,7 @@ public class GroupTab extends JPanel
 	private final AfkRouletteConfig config;
 	private final ConfigManager configManager;
 	private final ApiClient api;
-	private final PlayerState player;
+	private final GroupLeaver leaver;
 	private final JPanel groupBox = new JPanel(new DynamicGridLayout(0, 1, 0, 4));
 	private final JPanel list = new JPanel(new DynamicGridLayout(0, 1, 0, 6));
 	private final JPanel scores = new JPanel(new DynamicGridLayout(0, 1, 0, 2));
@@ -77,7 +78,7 @@ public class GroupTab extends JPanel
 
 	@Inject
 	GroupTab(GroupData group, ItemManager itemManager, SkillIconManager skillIcons, AfkRouletteConfig config,
-		ConfigManager configManager, ApiClient api, PlayerState player)
+		ConfigManager configManager, ApiClient api, GroupLeaver leaver)
 	{
 		this.group = group;
 		this.itemManager = itemManager;
@@ -85,7 +86,13 @@ public class GroupTab extends JPanel
 		this.config = config;
 		this.configManager = configManager;
 		this.api = api;
-		this.player = player;
+		this.leaver = leaver;
+		leaver.setFailureListener(error -> SwingUtilities.invokeLater(() ->
+		{
+			status.setForeground(Ui.ERROR);
+			status.setText(Ui.wrap("Left the group, but removing your data failed: " + error
+				+ ". Join again with the token and leave once more to retry."));
+		}));
 
 		setLayout(new DynamicGridLayout(0, 1, 0, 8));
 		setBackground(ColorScheme.DARK_GRAY_COLOR);
@@ -230,17 +237,29 @@ public class GroupTab extends JPanel
 					showFeedback(feedback, error, Ui.ERROR);
 					return;
 				}
+				String token = str(json, "token");
+				if (token == null || !ApiClient.isValidToken(token))
+				{
+					showFeedback(feedback, "The server sent an unexpected reply. Try again.", Ui.ERROR);
+					return;
+				}
 				// Saving the token fires ConfigChanged, which refreshes this tab.
-				configManager.setConfiguration(AfkRouletteConfig.GROUP, TOKEN_KEY, json.get("token").getAsString());
+				configManager.setConfiguration(AfkRouletteConfig.GROUP, TOKEN_KEY, token);
 			}));
 		});
 
 		join.addActionListener(e ->
 		{
-			String token = tokenField.getText().trim();
+			// Pasted tokens often carry spaces, line breaks or zero-width characters.
+			String token = cleanToken(tokenField.getText());
 			if (token.isEmpty())
 			{
 				showFeedback(feedback, "Paste the token you got from your group.", Ui.ERROR);
+				return;
+			}
+			if (!ApiClient.isValidToken(token))
+			{
+				showFeedback(feedback, "That doesn't look like a group token. Copy it again from your group.", Ui.ERROR);
 				return;
 			}
 			join.setEnabled(false);
@@ -266,28 +285,52 @@ public class GroupTab extends JPanel
 		{
 			return;
 		}
-		String name = player.getName();
 		String token = config.groupToken().trim();
 		// Forget the token first so the uploader stops, then delete our data with it.
 		configManager.unsetConfiguration(AfkRouletteConfig.GROUP, TOKEN_KEY);
-		if (name == null)
+		leaver.leave(token);
+	}
+
+	/** Strips whitespace (incl. non-breaking) and zero-width characters from a pasted token. */
+	private static String cleanToken(String raw)
+	{
+		return raw == null ? "" : raw.trim().replaceAll("[\\s\\u00A0\\u200B-\\u200F\\u2060\\uFEFF]", "");
+	}
+
+	private static String str(JsonObject o, String key)
+	{
+		if (o == null || !o.has(key) || !o.get(key).isJsonPrimitive())
 		{
-			return;
+			return null;
 		}
-		Map<String, Object> body = new HashMap<>();
-		body.put("name", name);
-		api.post("/api/plugin/group/leave", body, token, (json, error) ->
+		return o.get(key).getAsString();
+	}
+
+	private static String nz(String s)
+	{
+		return s == null ? "" : s;
+	}
+
+	private static int integer(JsonObject o, String key)
+	{
+		if (o == null || !o.has(key) || !o.get(key).isJsonPrimitive())
 		{
-			if (error != null)
-			{
-				SwingUtilities.invokeLater(() ->
-				{
-					status.setForeground(Ui.ERROR);
-					status.setText(Ui.wrap("Left the group, but removing your data failed: " + error
-						+ ". Join again with the token and leave once more to retry."));
-				});
-			}
-		});
+			return 0;
+		}
+		try
+		{
+			return o.get(key).getAsInt();
+		}
+		catch (NumberFormatException e)
+		{
+			return 0;
+		}
+	}
+
+	/** The array under {@code key}, or an empty one when it is missing or of the wrong type. */
+	private static JsonArray array(JsonObject o, String key)
+	{
+		return o != null && o.has(key) && o.get(key).isJsonArray() ? o.getAsJsonArray(key) : new JsonArray();
 	}
 
 	private static JTextField field(String tooltip)
@@ -330,17 +373,22 @@ public class GroupTab extends JPanel
 
 	private void addAfkScores(JsonObject json)
 	{
-		if (!json.has("players") || json.getAsJsonArray("players").size() == 0)
+		JsonArray players = array(json, "players");
+		if (players.size() == 0)
 		{
 			return;
 		}
 		scores.add(Ui.label("AFK (daily)", Ui.MUTED, true));
 		int rank = 1;
-		for (JsonElement el : json.getAsJsonArray("players"))
+		for (JsonElement el : players)
 		{
+			if (!el.isJsonObject())
+			{
+				continue;
+			}
 			JsonObject p = el.getAsJsonObject();
-			scores.add(Ui.label(rank + ". " + p.get("nick").getAsString() + " — streak " + p.get("current").getAsInt()
-				+ " · done " + p.get("done").getAsInt() + " · skips " + p.get("skips").getAsInt(),
+			scores.add(Ui.label(rank + ". " + nz(str(p, "nick")) + " — streak " + integer(p, "current")
+				+ " · done " + integer(p, "done") + " · skips " + integer(p, "skips"),
 				ColorScheme.LIGHT_GRAY_COLOR, false));
 			if (++rank > SCORE_ROWS)
 			{
@@ -351,17 +399,22 @@ public class GroupTab extends JPanel
 
 	private void addTaskerScores(JsonObject json, String key, String title)
 	{
-		if (!json.has(key) || json.getAsJsonArray(key).size() == 0)
+		JsonArray entries = array(json, key);
+		if (entries.size() == 0)
 		{
 			return;
 		}
 		scores.add(Ui.label(title, Ui.MUTED, true));
 		int rank = 1;
-		for (JsonElement el : json.getAsJsonArray(key))
+		for (JsonElement el : entries)
 		{
+			if (!el.isJsonObject())
+			{
+				continue;
+			}
 			JsonObject p = el.getAsJsonObject();
-			scores.add(Ui.label(rank + ". " + p.get("nick").getAsString() + " — done " + p.get("done").getAsInt()
-				+ " · skips " + p.get("skips").getAsInt(), ColorScheme.LIGHT_GRAY_COLOR, false));
+			scores.add(Ui.label(rank + ". " + nz(str(p, "nick")) + " — done " + integer(p, "done")
+				+ " · skips " + integer(p, "skips"), ColorScheme.LIGHT_GRAY_COLOR, false));
 			if (++rank > SCORE_ROWS)
 			{
 				break;

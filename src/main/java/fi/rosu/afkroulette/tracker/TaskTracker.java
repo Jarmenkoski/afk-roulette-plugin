@@ -6,7 +6,6 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParseException;
 import fi.rosu.afkroulette.AfkRouletteConfig;
-import fi.rosu.afkroulette.AfkRoulettePlugin;
 import fi.rosu.afkroulette.ApiClient;
 import fi.rosu.afkroulette.PlayerState;
 import java.util.ArrayList;
@@ -32,7 +31,6 @@ import net.runelite.api.ItemContainer;
 import net.runelite.api.NPC;
 import net.runelite.api.Player;
 import net.runelite.api.Skill;
-import net.runelite.api.WorldType;
 import net.runelite.api.events.ActorDeath;
 import net.runelite.api.events.ChatMessage;
 import net.runelite.api.events.GameTick;
@@ -45,6 +43,7 @@ import net.runelite.client.chat.ChatMessageBuilder;
 import net.runelite.client.chat.ChatMessageManager;
 import net.runelite.client.chat.QueuedMessage;
 import net.runelite.client.config.ConfigManager;
+import net.runelite.client.config.RuneScapeProfileType;
 import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.game.ItemManager;
 import net.runelite.client.util.Text;
@@ -73,10 +72,10 @@ public class TaskTracker
 	private static final Pattern SLAYER = Pattern.compile("^You've completed [\\d,]+ tasks", Pattern.CASE_INSENSITIVE);
 	private static final Pattern CLOG = Pattern.compile("^New item added to your collection log: (.+?)\\.?$", Pattern.CASE_INSENSITIVE);
 	private static final Pattern DIARY = Pattern.compile(
-		"completed all of the (easy|medium|hard|elite) tasks in the (.+?) area", Pattern.CASE_INSENSITIVE);
+		"^Congratulations!.*completed all of the (easy|medium|hard|elite) tasks in the (.+?) area", Pattern.CASE_INSENSITIVE);
 
-	/** Save progress at most this often (game ticks) so restarts don't lose it. */
-	private static final int SAVE_EVERY_TICKS = 10;
+	/** Save progress at most this often (game ticks, ~1 minute); also saved on logout and completion. */
+	private static final int SAVE_EVERY_TICKS = 100;
 	private static final String PROGRESS_KEY = "progress.";
 	/** Wait this long (game ticks, ~30 s) before retrying a failed completion. */
 	private static final int RETRY_TICKS = 50;
@@ -230,9 +229,26 @@ public class TaskTracker
 		}
 	}
 
-	/** Forget everything (logout, plugin stop). Client thread. */
+	/** Forget everything (logout, plugin stop), saving unsaved progress first. Client thread. */
 	public void reset()
 	{
+		saveAll();
+		clearState();
+	}
+
+	/**
+	 * Like {@link #reset()} for a changed RS profile: the config now points at the new profile,
+	 * so the old profile's unsaved progress must not be written to it. Client thread.
+	 */
+	public void resetForNewProfile()
+	{
+		clearState();
+	}
+
+	private void clearState()
+	{
+		dirty = false;
+		ticksSinceSave = 0;
 		generation++;
 		tracked.clear();
 		lastXp.clear();
@@ -327,31 +343,38 @@ public class TaskTracker
 		t.rollId = rollId;
 		t.type = str(verify, "type");
 		t.skill = lower(str(verify, "skill"));
-		t.target = verify.has("count") ? verify.get("count").getAsInt()
-			: verify.has("amount") ? verify.get("amount").getAsInt()
-			: verify.has("target") ? verify.get("target").getAsInt() : 1;
+		Integer count = integer(verify, "count");
+		if (count == null)
+		{
+			count = integer(verify, "amount");
+		}
+		if (count == null)
+		{
+			count = integer(verify, "target");
+		}
+		t.target = count != null ? count : 1;
 		for (String s : strings(verify, "skills"))
 		{
-			t.skills.add(lower(s));
+			addNonEmpty(t.skills, s);
 		}
 		for (String s : strings(verify, "names"))
 		{
-			t.names.add(lower(s));
+			addNonEmpty(t.names, s);
 		}
 		for (String s : strings(verify, "items"))
 		{
-			t.names.add(lower(s));
+			addNonEmpty(t.names, s);
 		}
 		t.quest = str(verify, "quest");
 		t.region = lower(str(verify, "region"));
 		t.tier = lower(str(verify, "tier"));
-		if ("clog".equals(t.type) && verify.has("itemIds"))
+		if ("clog".equals(t.type) && verify.has("itemIds") && verify.get("itemIds").isJsonArray())
 		{
 			for (JsonElement id : verify.getAsJsonArray("itemIds"))
 			{
 				try
 				{
-					t.names.add(lower(itemManager.getItemComposition(id.getAsInt()).getName()));
+					addNonEmpty(t.names, itemManager.getItemComposition(id.getAsInt()).getName());
 				}
 				catch (RuntimeException e)
 				{
@@ -359,13 +382,20 @@ public class TaskTracker
 				}
 			}
 		}
-		if (t.type == null)
+		if (t.type == null || t.target < 1 || !hasUsableSpec(t))
 		{
+			// An empty name would match every kill or item, so such a spec is never tracked.
+			if (existing != null)
+			{
+				tracked.remove(category);
+				notifyListeners(category, false);
+			}
 			return;
 		}
 		if ("level".equals(t.type))
 		{
-			int from = verify.has("from") ? verify.get("from").getAsInt() : t.target - 1;
+			Integer fromLevel = integer(verify, "from");
+			int from = fromLevel != null ? fromLevel : t.target - 1;
 			t.levelGain = Math.max(1, t.target - from);
 			t.levelBase = from;
 		}
@@ -487,13 +517,21 @@ public class TaskTracker
 
 		if (dirty && ++ticksSinceSave >= SAVE_EVERY_TICKS)
 		{
-			ticksSinceSave = 0;
-			dirty = false;
+			saveAll();
+		}
+	}
+
+	private void saveAll()
+	{
+		if (dirty)
+		{
 			for (Tracked t : tracked.values())
 			{
 				saveProgress(t);
 			}
 		}
+		ticksSinceSave = 0;
+		dirty = false;
 	}
 
 	@Subscribe
@@ -613,6 +651,8 @@ public class TaskTracker
 			return;
 		}
 		t.completing = true;
+		// Keep the finished progress even if the client closes before the server answers.
+		saveProgress(t);
 		Map<String, Object> body = new HashMap<>();
 		body.put("nick", player.getName());
 		body.put("status", t.completeAs);
@@ -666,13 +706,15 @@ public class TaskTracker
 			JsonObject saved = gson.fromJson(raw, JsonObject.class);
 			if (saved != null && t.rollId.equals(str(saved, "roll")))
 			{
-				t.progress = saved.has("progress") ? saved.get("progress").getAsInt() : 0;
+				Integer savedProgress = integer(saved, "progress");
+				t.progress = savedProgress != null ? savedProgress : 0;
 				t.seen.addAll(strings(saved, "seen"));
-				if (saved.has("base"))
+				Integer base = integer(saved, "base");
+				if (base != null)
 				{
-					t.levelBase = saved.get("base").getAsInt();
+					t.levelBase = base;
 				}
-				t.questChecked = saved.has("qc") && saved.get("qc").getAsBoolean();
+				t.questChecked = "true".equals(str(saved, "qc"));
 				return true;
 			}
 		}
@@ -738,14 +780,40 @@ public class TaskTracker
 	/** Leagues, Deadman etc. must not complete main-game tasks. */
 	private boolean onIgnoredWorld()
 	{
-		for (WorldType type : client.getWorldType())
+		return RuneScapeProfileType.getCurrent(client) != RuneScapeProfileType.STANDARD;
+	}
+
+	/** Whether the spec has what its type matches on; empty needles would match everything or nothing. */
+	private static boolean hasUsableSpec(Tracked t)
+	{
+		switch (t.type)
 		{
-			if (AfkRoulettePlugin.IGNORED_WORLDS.contains(type))
-			{
+			case "kc":
+			case "npc_kill":
+			case "item_gain":
+			case "clog":
+				return !t.names.isEmpty();
+			case "xp_gain":
+				return !t.skills.isEmpty();
+			case "xp_actions":
+			case "level":
+				return t.skill != null && !t.skill.trim().isEmpty();
+			case "quest":
+				return t.quest != null && !t.quest.trim().isEmpty();
+			case "diary":
+				return t.tier != null && !t.tier.isEmpty() && t.region != null && !t.region.isEmpty();
+			default:
 				return true;
-			}
 		}
-		return false;
+	}
+
+	private static void addNonEmpty(Set<String> target, String value)
+	{
+		String s = lower(value);
+		if (s != null && !s.trim().isEmpty())
+		{
+			target.add(s.trim());
+		}
 	}
 
 	private static String nz(String s)
@@ -789,6 +857,23 @@ public class TaskTracker
 			return null;
 		}
 		return o.get(key).getAsString();
+	}
+
+	/** A whole number under {@code key}, or null when it is missing or not numeric. */
+	private static Integer integer(JsonObject o, String key)
+	{
+		if (o == null || !o.has(key) || !o.get(key).isJsonPrimitive())
+		{
+			return null;
+		}
+		try
+		{
+			return o.get(key).getAsInt();
+		}
+		catch (NumberFormatException e)
+		{
+			return null;
+		}
 	}
 
 	private static JsonObject obj(JsonObject o, String key)

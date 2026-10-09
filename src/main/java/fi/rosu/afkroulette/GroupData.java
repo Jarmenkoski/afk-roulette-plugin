@@ -29,6 +29,9 @@ import net.runelite.client.game.ItemManager;
 public class GroupData
 {
 	public static final String[] CONTAINERS = {"inventory", "equipment", "bank", "seed_vault"};
+	private static final int MAX_ITEM_ID = 65535;
+	/** Item names resolved per refresh; ids come from other clients, so the work is bounded. */
+	private static final int MAX_LOOKUPS = 5000;
 
 	public static final class Member
 	{
@@ -135,9 +138,11 @@ public class GroupData
 				return;
 			}
 			List<Member> parsed;
+			String name;
 			try
 			{
 				parsed = parse(json);
+				name = json.has("name") && json.get("name").isJsonPrimitive() ? json.get("name").getAsString() : "";
 			}
 			catch (RuntimeException e)
 			{
@@ -145,7 +150,6 @@ public class GroupData
 				SwingUtilities.invokeLater(() -> onError.accept("Could not read the group data"));
 				return;
 			}
-			String name = json.has("name") && !json.get("name").isJsonNull() ? json.get("name").getAsString() : "";
 			Runnable publish = () ->
 			{
 				if (seq != requestSeq)
@@ -166,7 +170,7 @@ public class GroupData
 					int[] flat = m.items(c);
 					for (int i = 0; i + 1 < flat.length; i += 2)
 					{
-						if (flat[i] > 0 && !names.containsKey(flat[i]))
+						if (validItemId(flat[i]) && !names.containsKey(flat[i]) && missing.size() < MAX_LOOKUPS)
 						{
 							missing.add(flat[i]);
 						}
@@ -207,22 +211,30 @@ public class GroupData
 	private static List<Member> parse(JsonObject json)
 	{
 		List<Member> out = new ArrayList<>();
-		if (json == null || !json.has("members"))
+		if (json == null || !json.has("members") || !json.get("members").isJsonArray())
 		{
 			return out;
 		}
-		double now = json.has("now") ? json.get("now").getAsDouble() : System.currentTimeMillis() / 1000.0;
+		double now = number(json.get("now"), System.currentTimeMillis() / 1000.0);
 		for (JsonElement el : json.getAsJsonArray("members"))
 		{
+			if (!el.isJsonObject())
+			{
+				continue;
+			}
 			JsonObject m = el.getAsJsonObject();
-			JsonObject data = m.has("data") ? m.getAsJsonObject("data") : new JsonObject();
+			if (!m.has("nick") || !m.get("nick").isJsonPrimitive())
+			{
+				continue;
+			}
+			JsonObject data = m.has("data") && m.get("data").isJsonObject() ? m.getAsJsonObject("data") : new JsonObject();
 
 			Map<String, Integer> levels = new HashMap<>();
-			if (data.has("levels"))
+			if (data.has("levels") && data.get("levels").isJsonObject())
 			{
 				for (Map.Entry<String, JsonElement> e : data.getAsJsonObject("levels").entrySet())
 				{
-					levels.put(e.getKey(), e.getValue().getAsInt());
+					levels.put(e.getKey(), (int) number(e.getValue(), 1));
 				}
 			}
 
@@ -235,16 +247,40 @@ public class GroupData
 					int[] flat = new int[arr.size()];
 					for (int i = 0; i < flat.length; i++)
 					{
-						flat[i] = arr.get(i).getAsInt();
+						flat[i] = (int) number(arr.get(i), 0);
+					}
+					// [id, qty] pairs: an id outside the game's range blanks its whole slot.
+					for (int i = 0; i + 1 < flat.length; i += 2)
+					{
+						if (!validItemId(flat[i]))
+						{
+							flat[i] = 0;
+							flat[i + 1] = 0;
+						}
 					}
 					containers.put(c, flat);
 				}
 			}
 
-			double updatedAt = m.has("updated_at") ? m.get("updated_at").getAsDouble() : now;
+			double updatedAt = number(m.get("updated_at"), now);
 			long ago = Math.max(0, Math.round(now - updatedAt));
 			out.add(new Member(m.get("nick").getAsString(), ago, levels, containers));
 		}
 		return out;
+	}
+
+	private static boolean validItemId(int id)
+	{
+		return id >= 1 && id <= MAX_ITEM_ID;
+	}
+
+	/** A JSON number as a double, or {@code fallback} when it is missing or not numeric. */
+	private static double number(JsonElement e, double fallback)
+	{
+		if (e == null || !e.isJsonPrimitive() || !e.getAsJsonPrimitive().isNumber())
+		{
+			return fallback;
+		}
+		return e.getAsDouble();
 	}
 }

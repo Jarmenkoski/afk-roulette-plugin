@@ -25,7 +25,14 @@ Both server options are off by default. Each group is its own space on the serve
 
 ## Privacy
 
-With the server options on, the plugin sends your IP address and, if sharing is on, your levels, xp, quest states, inventory, equipment, bank and seed vault to the AFK Roulette server (afk-api.rosu.fi). Only people with your group's token can read the shared data.
+Nothing is sent until you turn on **Connect to AFK Roulette server** (off by default). What the plugin sends to the AFK Roulette server (afk-api.rosu.fi):
+
+- **With the server on:** your IP address, your RuneScape name and your task results (completions and skips, which the plugin derives from xp drops, kill counts, collection log, diary and quest messages).
+- **With "Share my data with the group" on, additionally:** your levels, xp, quest states, inventory, equipment, bank, seed vault, current world and an online heartbeat.
+
+Shared data can only be read by people with your group's token. Turning sharing off, or pressing **Leave group** (or switching to another group token), removes your shared data from the group.
+
+See the [privacy policy](https://afk.rosu.fi/privacy.html) for how the data is stored and used.
 
 ## Credits
 

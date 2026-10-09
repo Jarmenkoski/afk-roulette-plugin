@@ -8,12 +8,16 @@ import net.runelite.client.config.ConfigItem;
 public interface AfkRouletteConfig extends Config
 {
 	String GROUP = "afkroulette";
-	String SERVER_WARNING = "This feature submits your IP address to a 3rd-party server not controlled or verified by RuneLite developers";
+	String PRIVACY_URL = "https://afk.rosu.fi/privacy.html";
+	String SERVER_WARNING ="This feature submits your IP address to a 3rd-party server not controlled or verified by RuneLite developers";
 
 	@ConfigItem(
 		keyName = "serverEnabled",
 		name = "Connect to AFK Roulette server",
-		description = "Roll tasks and view your group from the AFK Roulette server (afk.rosu.fi)",
+		description = "Roll tasks and view your group from the AFK Roulette server (afk.rosu.fi). "
+			+ "Sends your IP address, your RuneScape name and your task results (completions and skips, "
+			+ "derived from xp drops, kill counts, collection log, diary and quest messages). "
+			+ "Privacy policy: " + PRIVACY_URL,
 		warning = SERVER_WARNING,
 		position = 0
 	)
@@ -25,7 +29,10 @@ public interface AfkRouletteConfig extends Config
 	@ConfigItem(
 		keyName = "shareData",
 		name = "Share my data with the group",
-		description = "Upload your levels, quests, inventory, equipment and bank so your group can see them",
+		description = "Additionally uploads your levels, xp, quest states, inventory, equipment, bank, seed vault, "
+			+ "current world and an online heartbeat so your group can see them. Turning this off "
+			+ "(or leaving the group) removes your shared data from the group. "
+			+ "Privacy policy: " + PRIVACY_URL,
 		warning = SERVER_WARNING,
 		position = 1
 	)

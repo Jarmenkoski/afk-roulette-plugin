@@ -106,26 +106,35 @@ public class SyncManager
 		}
 
 		body.put("name", playerName);
-		api.post("/api/plugin/update", body, (json, error) ->
+		try
 		{
-			synchronized (SyncManager.this)
+			api.post("/api/plugin/update", body, (json, error) -> finish(taken, playerName, error));
+		}
+		catch (RuntimeException e)
+		{
+			// The request never left: without this the uploader would stay "in flight" forever.
+			finish(taken, playerName, "Request could not be sent");
+		}
+	}
+
+	/** Ends an upload round; on failure the taken fields are queued again. */
+	private synchronized void finish(List<String> taken, String playerName, String error)
+	{
+		inFlight = false;
+		if (error == null)
+		{
+			return;
+		}
+		log.debug("Group sync failed: {}", error);
+		skipRounds = BACKOFF_ROUNDS;
+		for (String key : taken)
+		{
+			Entry e = entries.get(key);
+			if (e != null && e.pending == null && playerName.equals(e.owner))
 			{
-				inFlight = false;
-				if (error != null)
-				{
-					log.debug("Group sync failed: {}", error);
-					skipRounds = BACKOFF_ROUNDS;
-					for (String key : taken)
-					{
-						Entry e = entries.get(key);
-						if (e != null && e.pending == null && playerName.equals(e.owner))
-						{
-							e.pending = e.last;
-						}
-					}
-				}
+				e.pending = e.last;
 			}
-		});
+		}
 	}
 
 	/** Send everything again, e.g. after the token or the share toggle changes. */
@@ -135,6 +144,7 @@ public class SyncManager
 		{
 			e.pending = e.last;
 		}
+		inFlight = false;
 		skipRounds = 0;
 	}
 

@@ -1,6 +1,7 @@
 package fi.rosu.afkroulette;
 
 import com.google.gson.Gson;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParseException;
 import java.io.IOException;
@@ -15,7 +16,6 @@ import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.RequestBody;
 import okhttp3.Response;
-import okhttp3.ResponseBody;
 
 /**
  * Talks to the AFK Roulette server. Every call is asynchronous (OkHttp's own
@@ -27,6 +27,8 @@ public class ApiClient
 {
 	public static final String BASE_URL = "https://afk-api.rosu.fi";
 	private static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");
+	/** Larger responses are cut short and fail to parse instead of exhausting memory. */
+	private static final long MAX_RESPONSE_BYTES = 4_000_000;
 
 	public interface Callback
 	{
@@ -93,6 +95,12 @@ public class ApiClient
 		String token = tokenOverride != null ? tokenOverride.trim() : config.groupToken().trim();
 		if (!token.isEmpty())
 		{
+			// A pasted token with stray characters would make OkHttp throw on the header.
+			if (!isValidToken(token))
+			{
+				cb.onResult(null, "Invalid group token");
+				return;
+			}
 			request.header("Authorization", token);
 		}
 		request.header("Accept", "application/json");
@@ -109,29 +117,38 @@ public class ApiClient
 			@Override
 			public void onResponse(Call call, Response response)
 			{
-				try (ResponseBody responseBody = response.body())
+				JsonObject json;
+				String error;
+				try (Response r = response)
 				{
-					String text = responseBody != null ? responseBody.string() : "";
-					JsonObject json = parse(text);
-					if (response.isSuccessful())
+					JsonObject parsed = parse(r.peekBody(MAX_RESPONSE_BYTES).string());
+					json = parsed;
+					if (r.isSuccessful())
 					{
-						cb.onResult(json, json == null ? "Unexpected server response" : null);
+						error = parsed == null ? "Unexpected server response" : null;
 					}
 					else
 					{
-						String error = json != null && json.has("error")
-							? json.get("error").getAsString()
-							: "Server error " + response.code();
-						cb.onResult(json, error);
+						JsonElement e = parsed != null ? parsed.get("error") : null;
+						error = e != null && e.isJsonPrimitive() ? e.getAsString() : "Server error " + r.code();
 					}
 				}
-				catch (IOException e)
+				catch (IOException | RuntimeException e)
 				{
 					log.debug("AFK Roulette response read failed", e);
-					cb.onResult(null, "Could not read the server response");
+					json = null;
+					error = "Could not read the server response";
 				}
+				// Every request gets exactly one answer, so callers never stay "busy".
+				cb.onResult(json, error);
 			}
 		});
+	}
+
+	/** Tokens are URL-safe base64 from the server. */
+	public static boolean isValidToken(String token)
+	{
+		return token.matches("[A-Za-z0-9_-]{8,128}");
 	}
 
 	private JsonObject parse(String text)

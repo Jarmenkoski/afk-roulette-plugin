@@ -55,6 +55,8 @@ public class RollOverlay extends Overlay
 	/** Drawn at up to twice the base size, shrunk to fit narrow (fixed mode) viewports. */
 	private static final double MAX_SCALE = 2.0;
 	private static final int VIEWPORT_MARGIN = 16;
+	private static final int MAX_RESULT_CHARS = 100;
+	private static final int MAX_ITEM_ID = 65535;
 
 	private static final Color BACKGROUND = new Color(20, 18, 15, 225);
 	private static final Color TILE_COLOR = new Color(58, 52, 44);
@@ -132,17 +134,36 @@ public class RollOverlay extends Overlay
 	 */
 	public long play(List<Icon> reel, Icon winner, String heading, String result)
 	{
-		if (!config.rollAnimation() || reel.isEmpty() || winner == null)
+		if (!config.rollAnimation() || !valid(winner))
+		{
+			return 0;
+		}
+		// The reel comes from the server: only icons the game can actually have are drawn.
+		List<Icon> usable = new ArrayList<>();
+		for (Icon icon : reel)
+		{
+			if (valid(icon))
+			{
+				usable.add(icon);
+			}
+		}
+		if (usable.isEmpty())
 		{
 			return 0;
 		}
 		List<Icon> tiles = new ArrayList<>();
 		for (int i = 0; i < WINNER_INDEX + VISIBLE; i++)
 		{
-			tiles.add(i == WINNER_INDEX ? winner : reel.get(i % reel.size()));
+			tiles.add(i == WINNER_INDEX ? winner : usable.get(i % usable.size()));
 		}
-		spin.set(new Spin(tiles, heading, result));
+		String text = result == null ? "" : result.length() > MAX_RESULT_CHARS ? result.substring(0, MAX_RESULT_CHARS) : result;
+		spin.set(new Spin(tiles, heading, text));
 		return SPIN_MS;
+	}
+
+	private static boolean valid(Icon icon)
+	{
+		return icon != null && (icon.skill != null || (icon.item >= 1 && icon.item <= MAX_ITEM_ID));
 	}
 
 	public void stop()

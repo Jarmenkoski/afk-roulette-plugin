@@ -27,6 +27,7 @@ import javax.swing.border.EmptyBorder;
 import net.runelite.client.ui.ColorScheme;
 import net.runelite.client.ui.DynamicGridLayout;
 import net.runelite.client.util.LinkBrowser;
+import okhttp3.HttpUrl;
 
 /**
  * Roll / Done / Skip for AFK tasks and the Task, Boss and Collection
@@ -36,7 +37,8 @@ import net.runelite.client.util.LinkBrowser;
 @Singleton
 public class TasksTab extends JPanel
 {
-	private static final String WIKI = "https://oldschool.runescape.wiki";
+	private static final String WIKI_HOST = "oldschool.runescape.wiki";
+	private static final String WIKI = "https://" + WIKI_HOST;
 	private static final String QUEST_PREFIX = "Complete the quest: ";
 
 	private enum Category
@@ -351,13 +353,15 @@ public class TasksTab extends JPanel
 
 	private static RollOverlay.Icon icon(JsonObject o)
 	{
-		if (o.has("item") && o.get("item").isJsonPrimitive())
+		Integer item = integer(o, "item");
+		if (item != null)
 		{
-			return RollOverlay.Icon.item(o.get("item").getAsInt());
+			return RollOverlay.Icon.item(item);
 		}
-		if (o.has("skill") && o.get("skill").isJsonPrimitive())
+		String skill = str(o, "skill");
+		if (skill != null)
 		{
-			return RollOverlay.Icon.skill(o.get("skill").getAsString());
+			return RollOverlay.Icon.skill(skill);
 		}
 		return null;
 	}
@@ -385,7 +389,7 @@ public class TasksTab extends JPanel
 			JsonObject task = json.has("task") && json.get("task").isJsonObject()
 				? json.getAsJsonObject("task") : json;
 			showTask(task);
-			boolean active = json.has("active") && json.get("active").getAsBoolean();
+			boolean active = "true".equalsIgnoreCase(str(json, "active"));
 			setStatus(active ? "Your current task — finish or skip it." : "", Ui.MUTED);
 		}
 		refreshButtons();
@@ -407,9 +411,10 @@ public class TasksTab extends JPanel
 		title.setText(Ui.wrap(str(t, "name") + (taskIsDone ? " (done)" : "")));
 		List<String> lines = new ArrayList<>();
 		String line = capitalize(str(t, "skill"));
-		if (t.has("xp") && !t.get("xp").isJsonNull())
+		Integer xp = integer(t, "xp");
+		if (xp != null)
 		{
-			line += String.format(" · ~%,d xp/h", t.get("xp").getAsInt());
+			line += String.format(" · ~%,d xp/h", xp);
 		}
 		lines.add(line);
 		if (str(t, "afk") != null)
@@ -506,16 +511,24 @@ public class TasksTab extends JPanel
 
 	private void setWiki(String url)
 	{
-		if (url == null || url.isEmpty())
-		{
-			wikiUrl = null;
-		}
-		else
-		{
-			wikiUrl = url.startsWith("http") ? url : WIKI + url;
-		}
+		wikiUrl = safeWikiUrl(url);
 		title.setCursor(wikiUrl != null ? Cursor.getPredefinedCursor(Cursor.HAND_CURSOR) : Cursor.getDefaultCursor());
 		title.setToolTipText(wikiUrl != null ? "Open on the OSRS Wiki" : null);
+	}
+
+	/** The server's links are only ever opened when they point at the OSRS Wiki over https. */
+	private static String safeWikiUrl(String url)
+	{
+		if (url == null || url.isEmpty())
+		{
+			return null;
+		}
+		HttpUrl parsed = HttpUrl.parse(url.startsWith("/") ? WIKI + url : url);
+		if (parsed == null || !parsed.isHttps() || !WIKI_HOST.equals(parsed.host()))
+		{
+			return null;
+		}
+		return parsed.toString();
 	}
 
 	private void request(Runnable call)
@@ -581,7 +594,8 @@ public class TasksTab extends JPanel
 		List<String> parts = new ArrayList<>();
 		for (Map.Entry<String, JsonElement> e : t.getAsJsonObject("reqs").entrySet())
 		{
-			parts.add(capitalize(e.getKey()) + " " + e.getValue().getAsString());
+			JsonElement v = e.getValue();
+			parts.add(capitalize(e.getKey()) + " " + (v.isJsonPrimitive() ? v.getAsString() : v.toString()));
 		}
 		return String.join(", ", parts);
 	}
@@ -594,6 +608,23 @@ public class TasksTab extends JPanel
 		}
 		JsonElement e = o.get(key);
 		return e.isJsonPrimitive() ? e.getAsString() : e.toString();
+	}
+
+	/** A whole number under {@code key}, or null when it is missing or not numeric. */
+	private static Integer integer(JsonObject o, String key)
+	{
+		if (o == null || !o.has(key) || !o.get(key).isJsonPrimitive())
+		{
+			return null;
+		}
+		try
+		{
+			return o.get(key).getAsInt();
+		}
+		catch (NumberFormatException e)
+		{
+			return null;
+		}
 	}
 
 	private static String nz(String s)
