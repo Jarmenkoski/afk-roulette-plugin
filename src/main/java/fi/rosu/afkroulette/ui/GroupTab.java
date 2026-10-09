@@ -1,33 +1,50 @@
 package fi.rosu.afkroulette.ui;
 
+import fi.rosu.afkroulette.AfkRouletteConfig;
+import fi.rosu.afkroulette.ApiClient;
 import fi.rosu.afkroulette.GroupData;
+import fi.rosu.afkroulette.PlayerState;
 import java.awt.BorderLayout;
+import java.awt.Color;
 import java.awt.Cursor;
 import java.awt.Dimension;
 import java.awt.GridLayout;
+import java.awt.Toolkit;
+import java.awt.datatransfer.StringSelection;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import javax.inject.Inject;
 import javax.inject.Singleton;
 import javax.swing.ImageIcon;
 import javax.swing.JButton;
 import javax.swing.JLabel;
+import javax.swing.JOptionPane;
 import javax.swing.JPanel;
+import javax.swing.JTextField;
+import javax.swing.SwingUtilities;
 import javax.swing.border.EmptyBorder;
 import net.runelite.api.Skill;
+import net.runelite.client.config.ConfigManager;
 import net.runelite.client.game.ItemManager;
 import net.runelite.client.game.SkillIconManager;
 import net.runelite.client.ui.ColorScheme;
 import net.runelite.client.ui.DynamicGridLayout;
 import net.runelite.client.util.AsyncBufferedImage;
 
-/** Group members' levels, worn gear and inventory. */
+/**
+ * Create / join / leave a group, then see the members' levels, worn gear and
+ * inventory. Each group is its own token-protected space on the server.
+ */
 @Singleton
 public class GroupTab extends JPanel
 {
+	private static final String TOKEN_KEY = "groupToken";
+
 	/** Same order as the in-game skills tab. */
 	private static final Skill[] SKILL_ORDER = {
 		Skill.ATTACK, Skill.HITPOINTS, Skill.MINING,
@@ -44,26 +61,39 @@ public class GroupTab extends JPanel
 	private final GroupData group;
 	private final ItemManager itemManager;
 	private final SkillIconManager skillIcons;
+	private final AfkRouletteConfig config;
+	private final ConfigManager configManager;
+	private final ApiClient api;
+	private final PlayerState player;
+	private final JPanel groupBox = new JPanel(new DynamicGridLayout(0, 1, 0, 4));
 	private final JPanel list = new JPanel(new DynamicGridLayout(0, 1, 0, 6));
 	private final JLabel status = Ui.label("", Ui.MUTED, false);
 	private final JButton refresh = Ui.button("Refresh");
 	private final Set<String> expanded = new HashSet<>();
 
 	@Inject
-	GroupTab(GroupData group, ItemManager itemManager, SkillIconManager skillIcons)
+	GroupTab(GroupData group, ItemManager itemManager, SkillIconManager skillIcons, AfkRouletteConfig config,
+		ConfigManager configManager, ApiClient api, PlayerState player)
 	{
 		this.group = group;
 		this.itemManager = itemManager;
 		this.skillIcons = skillIcons;
+		this.config = config;
+		this.configManager = configManager;
+		this.api = api;
+		this.player = player;
 
 		setLayout(new DynamicGridLayout(0, 1, 0, 8));
 		setBackground(ColorScheme.DARK_GRAY_COLOR);
+		groupBox.setBackground(ColorScheme.DARKER_GRAY_COLOR);
+		groupBox.setBorder(new EmptyBorder(8, 8, 8, 8));
 		list.setOpaque(false);
 		refresh.addActionListener(e -> refresh());
+		add(groupBox);
 		add(refresh);
 		add(status);
 		add(list);
-		setStatus("Open this tab to load your group.");
+		rebuildGroupBox();
 	}
 
 	public void refreshIfStale()
@@ -76,11 +106,24 @@ public class GroupTab extends JPanel
 
 	public void refresh()
 	{
+		rebuildGroupBox();
+		if (!inGroup())
+		{
+			group.clear();
+			list.removeAll();
+			list.revalidate();
+			list.repaint();
+			refresh.setVisible(false);
+			setStatus("");
+			return;
+		}
+		refresh.setVisible(true);
 		refresh.setEnabled(false);
 		setStatus("Loading...");
 		group.refresh(() ->
 		{
 			refresh.setEnabled(true);
+			rebuildGroupBox();
 			render();
 		}, error ->
 		{
@@ -88,6 +131,156 @@ public class GroupTab extends JPanel
 			status.setForeground(Ui.ERROR);
 			status.setText(Ui.wrap(error));
 		});
+	}
+
+	private boolean inGroup()
+	{
+		return config.serverEnabled() && !config.groupToken().trim().isEmpty();
+	}
+
+	/** The create / join / leave controls on top of the tab. */
+	private void rebuildGroupBox()
+	{
+		groupBox.removeAll();
+		if (!config.serverEnabled())
+		{
+			groupBox.add(Ui.label("Turn on \"Connect to AFK Roulette server\" in the plugin settings "
+				+ "to create or join a group.", Ui.MUTED, false, Ui.TEXT_WIDTH - 16));
+		}
+		else if (config.groupToken().trim().isEmpty())
+		{
+			buildCreateJoin();
+		}
+		else
+		{
+			String name = group.getGroupName();
+			groupBox.add(Ui.label("Group: " + (name == null || name.isEmpty() ? "connected" : name),
+				Ui.GOLD, true, Ui.TEXT_WIDTH - 16));
+			groupBox.add(Ui.label("Share the token with your group so they can join. "
+				+ "Only people with the token can see the group's data.", Ui.MUTED, false, Ui.TEXT_WIDTH - 16));
+			JPanel row = new JPanel(new GridLayout(1, 2, 4, 0));
+			row.setOpaque(false);
+			JButton copy = Ui.button("Copy token");
+			copy.addActionListener(e ->
+			{
+				Toolkit.getDefaultToolkit().getSystemClipboard()
+					.setContents(new StringSelection(config.groupToken().trim()), null);
+				copy.setText("Copied!");
+			});
+			JButton leave = Ui.button("Leave group");
+			leave.addActionListener(e -> leaveGroup());
+			row.add(copy);
+			row.add(leave);
+			groupBox.add(row);
+		}
+		groupBox.revalidate();
+		groupBox.repaint();
+	}
+
+	private void buildCreateJoin()
+	{
+		int width = Ui.TEXT_WIDTH - 16;
+		groupBox.add(Ui.label("You're not in a group yet.", Ui.GOLD, true, width));
+
+		groupBox.add(Ui.label("Create a new group:", Ui.MUTED, false, width));
+		JTextField nameField = field("Group name");
+		JButton create = Ui.button("Create group");
+		groupBox.add(nameField);
+		groupBox.add(create);
+
+		groupBox.add(Ui.label("Or join with a token from your group:", Ui.MUTED, false, width));
+		JTextField tokenField = field("Group token");
+		JButton join = Ui.button("Join group");
+		groupBox.add(tokenField);
+		groupBox.add(join);
+
+		JLabel feedback = Ui.label("", Ui.MUTED, false, width);
+		groupBox.add(feedback);
+
+		create.addActionListener(e ->
+		{
+			String name = nameField.getText().trim();
+			if (name.isEmpty())
+			{
+				showFeedback(feedback, "Give the group a name.", Ui.ERROR);
+				return;
+			}
+			create.setEnabled(false);
+			Map<String, Object> body = new HashMap<>();
+			body.put("name", name);
+			api.post("/api/plugin/group/create", body, (json, error) -> SwingUtilities.invokeLater(() ->
+			{
+				create.setEnabled(true);
+				if (error != null)
+				{
+					showFeedback(feedback, error, Ui.ERROR);
+					return;
+				}
+				// Saving the token fires ConfigChanged, which refreshes this tab.
+				configManager.setConfiguration(AfkRouletteConfig.GROUP, TOKEN_KEY, json.get("token").getAsString());
+			}));
+		});
+
+		join.addActionListener(e ->
+		{
+			String token = tokenField.getText().trim();
+			if (token.isEmpty())
+			{
+				showFeedback(feedback, "Paste the token you got from your group.", Ui.ERROR);
+				return;
+			}
+			join.setEnabled(false);
+			api.get("/api/plugin/group/info", null, token, (json, error) -> SwingUtilities.invokeLater(() ->
+			{
+				join.setEnabled(true);
+				if (error != null)
+				{
+					showFeedback(feedback, "That token didn't work: " + error, Ui.ERROR);
+					return;
+				}
+				configManager.setConfiguration(AfkRouletteConfig.GROUP, TOKEN_KEY, token);
+			}));
+		});
+	}
+
+	private void leaveGroup()
+	{
+		int answer = JOptionPane.showConfirmDialog(this,
+			"Leave the group? Your shared data is removed from it.\nYou can join again with the token.",
+			"Leave group", JOptionPane.YES_NO_OPTION);
+		if (answer != JOptionPane.YES_OPTION)
+		{
+			return;
+		}
+		String name = player.getName();
+		if (name == null)
+		{
+			configManager.unsetConfiguration(AfkRouletteConfig.GROUP, TOKEN_KEY);
+			return;
+		}
+		Map<String, Object> body = new HashMap<>();
+		body.put("name", name);
+		// Delete our data with the old token first, then forget the token.
+		api.post("/api/plugin/group/leave", body, (json, error) -> SwingUtilities.invokeLater(() ->
+			configManager.unsetConfiguration(AfkRouletteConfig.GROUP, TOKEN_KEY)));
+	}
+
+	private static JTextField field(String tooltip)
+	{
+		JTextField f = new JTextField();
+		f.setToolTipText(tooltip);
+		f.setBackground(ColorScheme.DARK_GRAY_COLOR);
+		f.setForeground(Color.WHITE);
+		f.setCaretColor(Color.WHITE);
+		f.setBorder(new EmptyBorder(6, 6, 6, 6));
+		f.setPreferredSize(new Dimension(0, 28));
+		return f;
+	}
+
+	private static void showFeedback(JLabel label, String text, Color color)
+	{
+		label.setForeground(color);
+		label.setText(Ui.wrap(text, Ui.TEXT_WIDTH - 16));
 	}
 
 	private void render()

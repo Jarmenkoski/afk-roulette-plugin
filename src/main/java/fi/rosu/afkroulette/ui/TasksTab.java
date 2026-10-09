@@ -4,6 +4,7 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import fi.rosu.afkroulette.ApiClient;
 import fi.rosu.afkroulette.PlayerState;
+import fi.rosu.afkroulette.tracker.TaskTracker;
 import java.awt.Cursor;
 import java.awt.GridLayout;
 import java.awt.event.MouseAdapter;
@@ -54,10 +55,12 @@ public class TasksTab extends JPanel
 
 	private final ApiClient api;
 	private final PlayerState player;
+	private final TaskTracker tracker;
 	private final Map<Category, JButton> categoryButtons = new EnumMap<>(Category.class);
 	private final JLabel title = Ui.label("", Ui.GOLD, true);
 	private final JLabel meta = Ui.label("", Ui.MUTED, false);
 	private final JLabel tip = Ui.label("", Ui.MUTED, false);
+	private final JLabel progress = Ui.label("", Ui.OK, false);
 	private final JLabel status = Ui.label("", Ui.MUTED, false);
 	private final JButton roll = Ui.button("Roll");
 	private final JButton done = Ui.button("Done");
@@ -72,10 +75,12 @@ public class TasksTab extends JPanel
 	private boolean busy;
 
 	@Inject
-	TasksTab(ApiClient api, PlayerState player)
+	TasksTab(ApiClient api, PlayerState player, TaskTracker tracker)
 	{
 		this.api = api;
 		this.player = player;
+		this.tracker = tracker;
+		tracker.addListener((cat, completed) -> SwingUtilities.invokeLater(() -> onTracker(cat, completed)));
 
 		setLayout(new DynamicGridLayout(0, 1, 0, 8));
 		setBackground(ColorScheme.DARK_GRAY_COLOR);
@@ -108,6 +113,7 @@ public class TasksTab extends JPanel
 		card.add(title);
 		card.add(meta);
 		card.add(tip);
+		card.add(progress);
 		add(card);
 
 		JPanel actions = new JPanel(new GridLayout(2, 2, 4, 4));
@@ -151,7 +157,7 @@ public class TasksTab extends JPanel
 			? "Your daily AFK task: the best xp/h AFK method in a random skill."
 			: "No task yet.");
 		setStatus("", Ui.MUTED);
-		if (c != Category.AFK && player.getName() != null)
+		if (player.getName() != null)
 		{
 			loadCurrent();
 		}
@@ -160,9 +166,15 @@ public class TasksTab extends JPanel
 	private void loadCurrent()
 	{
 		Map<String, String> q = nickQuery();
-		q.put("category", category.key);
 		Category requested = category;
-		request(() -> api.get("/api/tasker/current", q, (json, error) -> ui(() ->
+		String path = "/api/afk/current";
+		if (category != Category.AFK)
+		{
+			path = "/api/tasker/current";
+			q.put("category", category.key);
+		}
+		String target = path;
+		request(() -> api.get(target, q, (json, error) -> ui(() ->
 		{
 			busy = false;
 			if (requested != category)
@@ -173,6 +185,10 @@ public class TasksTab extends JPanel
 			if (error != null)
 			{
 				setStatus(error, Ui.ERROR);
+			}
+			else if (category == Category.AFK && json.has("task") && json.get("task").isJsonObject())
+			{
+				showAfk(json);
 			}
 			else if (json.has("active") && json.get("active").isJsonObject())
 			{
@@ -227,6 +243,7 @@ public class TasksTab extends JPanel
 				return;
 			}
 			busy = false;
+			tracker.refresh();
 			if ("already".equals(result) && json.has("next") && json.get("next").isJsonObject())
 			{
 				showTask(json.getAsJsonObject("next"));
@@ -255,6 +272,7 @@ public class TasksTab extends JPanel
 			refreshButtons();
 			return;
 		}
+		tracker.refresh();
 		if (category == Category.AFK)
 		{
 			showAfk(json);
@@ -306,6 +324,7 @@ public class TasksTab extends JPanel
 		meta.setText(Ui.wrap(String.join("\n", lines)).replace("\n", "<br>"));
 		tip.setText(Ui.wrap(nz(str(t, "notes"))));
 		setWiki(str(t, "url"));
+		updateProgress();
 		setStatus(stats(json), Ui.MUTED);
 	}
 
@@ -336,6 +355,7 @@ public class TasksTab extends JPanel
 		meta.setText(Ui.wrap(metaText));
 		tip.setText(Ui.wrap(nz(str(t, "tip"))));
 		setWiki(str(t, "wiki"));
+		updateProgress();
 	}
 
 	private void clearCard(String message)
@@ -346,8 +366,33 @@ public class TasksTab extends JPanel
 		title.setText(Ui.wrap(message));
 		meta.setText("");
 		tip.setText("");
+		progress.setText("");
 		setWiki(null);
 		refreshButtons();
+	}
+
+	private void onTracker(String trackerCategory, boolean completed)
+	{
+		if (!trackerCategory.equals(category.key))
+		{
+			return;
+		}
+		if (completed && !busy)
+		{
+			// The game showed the task done: reload the card from the server.
+			select(category);
+			setStatus("Task completed automatically!", Ui.OK);
+		}
+		else if (hasTask)
+		{
+			updateProgress();
+		}
+	}
+
+	private void updateProgress()
+	{
+		String text = hasTask && !taskIsDone ? tracker.progressText(category.key) : null;
+		progress.setText(text == null ? "" : Ui.wrap(text));
 	}
 
 	private void setWiki(String url)

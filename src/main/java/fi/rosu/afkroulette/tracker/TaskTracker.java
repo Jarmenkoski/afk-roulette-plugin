@@ -1,0 +1,704 @@
+package fi.rosu.afkroulette.tracker;
+
+import com.google.gson.Gson;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParseException;
+import fi.rosu.afkroulette.AfkRouletteConfig;
+import fi.rosu.afkroulette.ApiClient;
+import fi.rosu.afkroulette.PlayerState;
+import java.util.ArrayList;
+import java.util.EnumMap;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import javax.inject.Inject;
+import javax.inject.Singleton;
+import lombok.extern.slf4j.Slf4j;
+import net.runelite.api.ChatMessageType;
+import net.runelite.api.Client;
+import net.runelite.api.GameState;
+import net.runelite.api.Item;
+import net.runelite.api.ItemContainer;
+import net.runelite.api.NPC;
+import net.runelite.api.Player;
+import net.runelite.api.Skill;
+import net.runelite.api.events.ActorDeath;
+import net.runelite.api.events.ChatMessage;
+import net.runelite.api.events.GameTick;
+import net.runelite.api.events.ItemContainerChanged;
+import net.runelite.api.events.StatChanged;
+import net.runelite.api.gameval.InventoryID;
+import net.runelite.client.callback.ClientThread;
+import net.runelite.client.chat.ChatColorType;
+import net.runelite.client.chat.ChatMessageBuilder;
+import net.runelite.client.chat.ChatMessageManager;
+import net.runelite.client.chat.QueuedMessage;
+import net.runelite.client.config.ConfigManager;
+import net.runelite.client.eventbus.Subscribe;
+import net.runelite.client.game.ItemManager;
+import net.runelite.client.util.Text;
+
+/**
+ * Completes the player's active tasks automatically from game events.
+ *
+ * The server attaches a "verify" spec to every rolled task (see the backend's
+ * verify.py). This class follows the active task of each category, counts
+ * progress from xp drops, inventory gains, kill-count / collection log / diary
+ * chat messages, kills and the quest log, and marks the task done on the
+ * server when the target is reached. Tasks without a spec stay manual.
+ *
+ * All state is touched on the client thread only; server replies hop back to it
+ * with clientThread.invokeLater().
+ */
+@Slf4j
+@Singleton
+public class TaskTracker
+{
+	public static final String[] CATEGORIES = {"afk", "task", "boss", "collection"};
+
+	/** "Your Scurrius kill count is: 5.", "Your Varrock Rooftop lap count is: 12." ... */
+	private static final Pattern KC = Pattern.compile("^Your (.+?) count is: ?([\\d,]+)", Pattern.CASE_INSENSITIVE);
+	private static final Pattern RIFTS = Pattern.compile("^Amount of rifts you have closed: ?[\\d,]+", Pattern.CASE_INSENSITIVE);
+	private static final Pattern SLAYER = Pattern.compile("^You've completed [\\d,]+ tasks", Pattern.CASE_INSENSITIVE);
+	private static final Pattern CLOG = Pattern.compile("^New item added to your collection log: (.+?)\\.?$", Pattern.CASE_INSENSITIVE);
+	private static final Pattern DIARY = Pattern.compile(
+		"completed all of the (easy|medium|hard|elite) tasks in the (.+?) area", Pattern.CASE_INSENSITIVE);
+
+	/** Save progress at most this often (game ticks) so restarts don't lose it. */
+	private static final int SAVE_EVERY_TICKS = 10;
+	private static final String PROGRESS_KEY = "progress.";
+
+	/** Change notification for the panel. Called on the client thread. */
+	public interface Listener
+	{
+		void onTrackerChanged(String category, boolean completed);
+	}
+
+	private static final class Tracked
+	{
+		String category;
+		String name;
+		String type;
+		String skill;
+		Set<String> skills = new HashSet<>();
+		Set<String> names = new HashSet<>();
+		String quest;
+		String region;
+		String tier;
+		int target;
+		volatile int progress;
+		Set<String> seen = new HashSet<>();
+		boolean completing;
+	}
+
+	private static final class PendingGain
+	{
+		final String item;
+		final int qty;
+		final int tick;
+
+		PendingGain(String item, int qty, int tick)
+		{
+			this.item = item;
+			this.qty = qty;
+			this.tick = tick;
+		}
+	}
+
+	private final Client client;
+	private final ClientThread clientThread;
+	private final ItemManager itemManager;
+	private final ApiClient api;
+	private final PlayerState player;
+	private final ConfigManager configManager;
+	private final ChatMessageManager chatMessageManager;
+	private final AfkRouletteConfig config;
+	private final Gson gson;
+
+	private final Map<String, Tracked> tracked = new ConcurrentHashMap<>();
+	private final List<Listener> listeners = new CopyOnWriteArrayList<>();
+	private final Map<Skill, Integer> lastXp = new EnumMap<>(Skill.class);
+	private final Map<String, Integer> lastXpTick = new HashMap<>();
+	private final List<PendingGain> pendingGains = new ArrayList<>();
+	private Map<String, Integer> lastInventory;
+	private boolean dirty;
+	private int ticksSinceSave;
+
+	@Inject
+	TaskTracker(Client client, ClientThread clientThread, ItemManager itemManager, ApiClient api,
+		PlayerState player, ConfigManager configManager, ChatMessageManager chatMessageManager,
+		AfkRouletteConfig config, Gson gson)
+	{
+		this.client = client;
+		this.clientThread = clientThread;
+		this.itemManager = itemManager;
+		this.api = api;
+		this.player = player;
+		this.configManager = configManager;
+		this.chatMessageManager = chatMessageManager;
+		this.config = config;
+		this.gson = gson;
+	}
+
+	public void addListener(Listener l)
+	{
+		listeners.add(l);
+	}
+
+	/** Progress line for the panel, or null when the category's task isn't auto-tracked. */
+	public String progressText(String category)
+	{
+		Tracked t = tracked.get(category);
+		if (t == null)
+		{
+			return null;
+		}
+		switch (t.type)
+		{
+			case "quest":
+				return "Completes automatically when the quest is finished.";
+			case "diary":
+				return "Completes automatically when the diary tier is finished.";
+			case "level":
+				return String.format("Level %d / %d — tracked automatically", t.progress, t.target);
+			case "xp_gain":
+				return String.format("%,d / %,d xp — tracked automatically", t.progress, t.target);
+			default:
+				return String.format("%,d / %,d — tracked automatically", t.progress, t.target);
+		}
+	}
+
+	/** Re-read every category's active task from the server. Safe from any thread. */
+	public void refresh()
+	{
+		String nick = player.getName();
+		if (nick == null || !config.serverEnabled())
+		{
+			clientThread.invokeLater(() -> tracked.clear());
+			return;
+		}
+		Map<String, String> q = new HashMap<>();
+		q.put("nick", nick);
+		api.get("/api/afk/current", q, (json, error) ->
+		{
+			if (error == null)
+			{
+				boolean done = "done".equals(str(json, "status"));
+				JsonObject task = obj(json, "task");
+				clientThread.invokeLater(() -> apply("afk", done ? null : task));
+			}
+		});
+		for (String category : new String[]{"task", "boss", "collection"})
+		{
+			Map<String, String> cq = new HashMap<>(q);
+			cq.put("category", category);
+			api.get("/api/tasker/current", cq, (json, error) ->
+			{
+				if (error == null)
+				{
+					JsonObject task = obj(json, "active");
+					clientThread.invokeLater(() -> apply(category, task));
+				}
+			});
+		}
+	}
+
+	/** Forget everything (logout, plugin stop). Client thread. */
+	public void reset()
+	{
+		tracked.clear();
+		lastXp.clear();
+		lastXpTick.clear();
+		pendingGains.clear();
+		lastInventory = null;
+	}
+
+	/** Take xp baselines so the next xp drop counts. Client thread, logged in. */
+	public void baseline()
+	{
+		for (Skill skill : Skill.values())
+		{
+			lastXp.put(skill, client.getSkillExperience(skill));
+		}
+		ItemContainer inv = client.getItemContainer(InventoryID.INV);
+		lastInventory = inv != null ? countByName(inv) : null;
+	}
+
+	/** Called by the plugin with the current quest log (client thread). */
+	public void onQuestStates(Map<String, String> states)
+	{
+		for (Tracked t : tracked.values())
+		{
+			if ("quest".equals(t.type))
+			{
+				for (Map.Entry<String, String> e : states.entrySet())
+				{
+					if (e.getKey().equalsIgnoreCase(t.quest) && "FINISHED".equals(e.getValue()))
+					{
+						t.progress = t.target;
+						maybeComplete(t);
+					}
+				}
+			}
+		}
+	}
+
+	private void apply(String category, JsonObject task)
+	{
+		JsonObject verify = obj(task, "verify");
+		String name = task != null ? (str(task, "name") != null ? str(task, "name") : str(task, "task")) : null;
+		if (task == null || verify == null || name == null)
+		{
+			if (tracked.remove(category) != null)
+			{
+				notifyListeners(category, false);
+			}
+			return;
+		}
+		Tracked existing = tracked.get(category);
+		if (existing != null && existing.name.equals(name))
+		{
+			return;
+		}
+
+		Tracked t = new Tracked();
+		t.category = category;
+		t.name = name;
+		t.type = str(verify, "type");
+		t.skill = lower(str(verify, "skill"));
+		t.target = verify.has("count") ? verify.get("count").getAsInt()
+			: verify.has("amount") ? verify.get("amount").getAsInt()
+			: verify.has("target") ? verify.get("target").getAsInt() : 1;
+		for (String s : strings(verify, "skills"))
+		{
+			t.skills.add(lower(s));
+		}
+		for (String s : strings(verify, "names"))
+		{
+			t.names.add(lower(s));
+		}
+		for (String s : strings(verify, "items"))
+		{
+			t.names.add(lower(s));
+		}
+		t.quest = str(verify, "quest");
+		t.region = lower(str(verify, "region"));
+		t.tier = lower(str(verify, "tier"));
+		if ("clog".equals(t.type) && verify.has("itemIds"))
+		{
+			for (JsonElement id : verify.getAsJsonArray("itemIds"))
+			{
+				try
+				{
+					t.names.add(lower(itemManager.getItemComposition(id.getAsInt()).getName()));
+				}
+				catch (RuntimeException e)
+				{
+					log.debug("Unknown collection log item {}", id, e);
+				}
+			}
+		}
+		if (t.type == null)
+		{
+			return;
+		}
+		restoreProgress(t);
+		if ("level".equals(t.type) && t.skill != null)
+		{
+			Skill skill = skillByName(t.skill);
+			if (skill != null && client.getGameState() == GameState.LOGGED_IN)
+			{
+				t.progress = client.getRealSkillLevel(skill);
+			}
+		}
+		tracked.put(category, t);
+		notifyListeners(category, false);
+		maybeComplete(t);
+	}
+
+	@Subscribe
+	public void onStatChanged(StatChanged event)
+	{
+		Skill skill = event.getSkill();
+		String skillName = lower(skill.getName());
+		Integer previous = lastXp.put(skill, event.getXp());
+		int delta = previous == null ? 0 : event.getXp() - previous;
+		if (delta > 0)
+		{
+			lastXpTick.put(skillName, client.getTickCount());
+		}
+		for (Tracked t : tracked.values())
+		{
+			switch (t.type)
+			{
+				case "xp_actions":
+					if (delta > 0 && skillName.equals(t.skill))
+					{
+						add(t, 1);
+					}
+					break;
+				case "xp_gain":
+					if (delta > 0 && t.skills.contains(skillName))
+					{
+						add(t, delta);
+					}
+					break;
+				case "level":
+					if (skillName.equals(t.skill) && event.getLevel() != t.progress)
+					{
+						t.progress = event.getLevel();
+						dirty = true;
+						notifyListeners(t.category, false);
+						maybeComplete(t);
+					}
+					break;
+				default:
+			}
+		}
+	}
+
+	@Subscribe
+	public void onItemContainerChanged(ItemContainerChanged event)
+	{
+		if (event.getContainerId() != InventoryID.INV)
+		{
+			return;
+		}
+		Map<String, Integer> now = countByName(event.getItemContainer());
+		if (lastInventory != null && hasType("item_gain"))
+		{
+			for (Map.Entry<String, Integer> e : now.entrySet())
+			{
+				int gained = e.getValue() - lastInventory.getOrDefault(e.getKey(), 0);
+				if (gained > 0)
+				{
+					pendingGains.add(new PendingGain(e.getKey(), gained, client.getTickCount()));
+				}
+			}
+		}
+		lastInventory = now;
+	}
+
+	@Subscribe
+	public void onGameTick(GameTick tick)
+	{
+		// Inventory and xp updates for the same action can arrive in either order;
+		// count a gain once its tick is over, if the task's skill gained xp around it.
+		int now = client.getTickCount();
+		for (Iterator<PendingGain> it = pendingGains.iterator(); it.hasNext(); )
+		{
+			PendingGain gain = it.next();
+			if (gain.tick >= now)
+			{
+				continue;
+			}
+			it.remove();
+			for (Tracked t : tracked.values())
+			{
+				if ("item_gain".equals(t.type) && t.names.contains(gain.item))
+				{
+					Integer xpTick = lastXpTick.get(t.skill);
+					if (xpTick != null && xpTick >= gain.tick - 1 && xpTick <= now)
+					{
+						add(t, gain.qty);
+					}
+				}
+			}
+		}
+
+		if (dirty && ++ticksSinceSave >= SAVE_EVERY_TICKS)
+		{
+			ticksSinceSave = 0;
+			dirty = false;
+			for (Tracked t : tracked.values())
+			{
+				saveProgress(t);
+			}
+		}
+	}
+
+	@Subscribe
+	public void onChatMessage(ChatMessage event)
+	{
+		if (event.getType() != ChatMessageType.GAMEMESSAGE && event.getType() != ChatMessageType.SPAM)
+		{
+			return;
+		}
+		String message = Text.removeTags(event.getMessage());
+
+		String counter = null;
+		Matcher kc = KC.matcher(message);
+		if (kc.find())
+		{
+			counter = lower(kc.group(1));
+		}
+		else if (RIFTS.matcher(message).find())
+		{
+			counter = "guardians of the rift";
+		}
+		else if (SLAYER.matcher(message).find())
+		{
+			counter = "slayer task";
+		}
+		if (counter != null)
+		{
+			for (Tracked t : tracked.values())
+			{
+				if ("kc".equals(t.type) && containsAny(counter, t.names))
+				{
+					add(t, 1);
+				}
+			}
+			return;
+		}
+
+		Matcher clog = CLOG.matcher(message);
+		if (clog.find())
+		{
+			String item = lower(clog.group(1));
+			for (Tracked t : tracked.values())
+			{
+				if ("clog".equals(t.type) && t.names.contains(item) && t.seen.add(item))
+				{
+					t.progress = t.seen.size();
+					dirty = true;
+					notifyListeners(t.category, false);
+					maybeComplete(t);
+				}
+			}
+			return;
+		}
+
+		Matcher diary = DIARY.matcher(message);
+		if (diary.find())
+		{
+			String tier = lower(diary.group(1));
+			String region = lower(diary.group(2)).replace(" & ", "-and-").replace(' ', '-');
+			for (Tracked t : tracked.values())
+			{
+				if ("diary".equals(t.type) && tier.equals(t.tier) && region.equals(t.region))
+				{
+					t.progress = t.target;
+					maybeComplete(t);
+				}
+			}
+		}
+	}
+
+	@Subscribe
+	public void onActorDeath(ActorDeath event)
+	{
+		if (!(event.getActor() instanceof NPC))
+		{
+			return;
+		}
+		NPC npc = (NPC) event.getActor();
+		Player local = client.getLocalPlayer();
+		if (local == null || npc.getName() == null
+			|| (local.getInteracting() != npc && npc.getInteracting() != local))
+		{
+			return;
+		}
+		String npcName = lower(npc.getName());
+		for (Tracked t : tracked.values())
+		{
+			if ("npc_kill".equals(t.type) && containsAny(npcName, t.names))
+			{
+				add(t, 1);
+			}
+		}
+	}
+
+	private void add(Tracked t, int amount)
+	{
+		t.progress += amount;
+		dirty = true;
+		notifyListeners(t.category, false);
+		maybeComplete(t);
+	}
+
+	private void maybeComplete(Tracked t)
+	{
+		if (t.completing || t.progress < t.target || player.getName() == null)
+		{
+			return;
+		}
+		t.completing = true;
+		Map<String, Object> body = new HashMap<>();
+		body.put("nick", player.getName());
+		body.put("status", "done");
+		String path = "/api/afk/complete";
+		if (!"afk".equals(t.category))
+		{
+			path = "/api/tasker/complete";
+			body.put("category", t.category);
+		}
+		api.post(path, body, (json, error) -> clientThread.invokeLater(() ->
+		{
+			if (error != null)
+			{
+				log.debug("Auto-complete failed: {}", error);
+				t.completing = false;
+				refresh();
+				return;
+			}
+			tracked.remove(t.category, t);
+			clearProgress(t);
+			chatMessageManager.queue(QueuedMessage.builder()
+				.type(ChatMessageType.GAMEMESSAGE)
+				.runeLiteFormattedMessage(new ChatMessageBuilder()
+					.append(ChatColorType.HIGHLIGHT)
+					.append("AFK Roulette: ")
+					.append(ChatColorType.NORMAL)
+					.append("Task complete — " + t.name)
+					.build())
+				.build());
+			notifyListeners(t.category, true);
+		}));
+	}
+
+	private void restoreProgress(Tracked t)
+	{
+		String raw = configManager.getRSProfileConfiguration(AfkRouletteConfig.GROUP, PROGRESS_KEY + t.category);
+		if (raw == null)
+		{
+			return;
+		}
+		try
+		{
+			JsonObject saved = gson.fromJson(raw, JsonObject.class);
+			if (saved != null && t.name.equals(str(saved, "name")))
+			{
+				t.progress = saved.has("progress") ? saved.get("progress").getAsInt() : 0;
+				t.seen.addAll(strings(saved, "seen"));
+			}
+		}
+		catch (JsonParseException | IllegalStateException | UnsupportedOperationException e)
+		{
+			log.debug("Bad saved progress for {}", t.category, e);
+		}
+	}
+
+	private void saveProgress(Tracked t)
+	{
+		JsonObject saved = new JsonObject();
+		saved.addProperty("name", t.name);
+		saved.addProperty("progress", t.progress);
+		JsonArray seen = new JsonArray();
+		t.seen.forEach(seen::add);
+		saved.add("seen", seen);
+		configManager.setRSProfileConfiguration(AfkRouletteConfig.GROUP, PROGRESS_KEY + t.category, gson.toJson(saved));
+	}
+
+	private void clearProgress(Tracked t)
+	{
+		configManager.unsetRSProfileConfiguration(AfkRouletteConfig.GROUP, PROGRESS_KEY + t.category);
+	}
+
+	private void notifyListeners(String category, boolean completed)
+	{
+		for (Listener l : listeners)
+		{
+			l.onTrackerChanged(category, completed);
+		}
+	}
+
+	private boolean hasType(String type)
+	{
+		for (Tracked t : tracked.values())
+		{
+			if (type.equals(t.type))
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private Map<String, Integer> countByName(ItemContainer container)
+	{
+		Map<String, Integer> counts = new HashMap<>();
+		for (Item item : container.getItems())
+		{
+			if (item.getId() > 0 && item.getQuantity() > 0)
+			{
+				String name = lower(itemManager.getItemComposition(itemManager.canonicalize(item.getId())).getName());
+				counts.merge(name, item.getQuantity(), Integer::sum);
+			}
+		}
+		return counts;
+	}
+
+	private static Skill skillByName(String name)
+	{
+		for (Skill s : Skill.values())
+		{
+			if (s.getName().equalsIgnoreCase(name))
+			{
+				return s;
+			}
+		}
+		return null;
+	}
+
+	private static boolean containsAny(String text, Set<String> needles)
+	{
+		for (String n : needles)
+		{
+			if (text.contains(n))
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static String lower(String s)
+	{
+		return s == null ? null : s.toLowerCase(Locale.ROOT);
+	}
+
+	private static String str(JsonObject o, String key)
+	{
+		if (o == null || !o.has(key) || o.get(key).isJsonNull() || !o.get(key).isJsonPrimitive())
+		{
+			return null;
+		}
+		return o.get(key).getAsString();
+	}
+
+	private static JsonObject obj(JsonObject o, String key)
+	{
+		if (o == null || !o.has(key) || !o.get(key).isJsonObject())
+		{
+			return null;
+		}
+		return o.getAsJsonObject(key);
+	}
+
+	private static List<String> strings(JsonObject o, String key)
+	{
+		List<String> out = new ArrayList<>();
+		if (o != null && o.has(key) && o.get(key).isJsonArray())
+		{
+			for (JsonElement e : o.getAsJsonArray(key))
+			{
+				if (e.isJsonPrimitive())
+				{
+					out.add(e.getAsString());
+				}
+			}
+		}
+		return out;
+	}
+}

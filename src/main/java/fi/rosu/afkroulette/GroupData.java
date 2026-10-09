@@ -84,6 +84,8 @@ public class GroupData
 	private volatile List<Member> members = Collections.emptyList();
 	@Getter
 	private volatile long fetchedAtMillis;
+	@Getter
+	private volatile String groupName = "";
 
 	@Inject
 	GroupData(ApiClient api, ClientThread clientThread, ItemManager itemManager)
@@ -96,6 +98,14 @@ public class GroupData
 	public List<Member> getMembers()
 	{
 		return members;
+	}
+
+	/** Drop the cached snapshot, e.g. after leaving a group. */
+	public void clear()
+	{
+		members = Collections.emptyList();
+		groupName = "";
+		fetchedAtMillis = 0;
 	}
 
 	/** Item name from the game cache, or a placeholder until it has been resolved. */
@@ -129,6 +139,7 @@ public class GroupData
 				return;
 			}
 			members = parsed;
+			groupName = json.has("name") && !json.get("name").isJsonNull() ? json.get("name").getAsString() : "";
 			fetchedAtMillis = System.currentTimeMillis();
 
 			Set<Integer> missing = new HashSet<>();

@@ -51,6 +51,12 @@ public class ApiClient
 
 	public void get(String path, Map<String, String> query, Callback cb)
 	{
+		get(path, query, null, cb);
+	}
+
+	/** GET with an explicit group token instead of the configured one (e.g. to check a token before saving it). */
+	public void get(String path, Map<String, String> query, String tokenOverride, Callback cb)
+	{
 		HttpUrl base = HttpUrl.parse(BASE_URL + path);
 		if (base == null)
 		{
@@ -62,23 +68,23 @@ public class ApiClient
 		{
 			query.forEach(url::addQueryParameter);
 		}
-		send(new Request.Builder().url(url.build()).get(), cb);
+		send(new Request.Builder().url(url.build()).get(), tokenOverride, cb);
 	}
 
 	public void post(String path, Object body, Callback cb)
 	{
 		RequestBody requestBody = RequestBody.create(JSON, gson.toJson(body));
-		send(new Request.Builder().url(BASE_URL + path).post(requestBody), cb);
+		send(new Request.Builder().url(BASE_URL + path).post(requestBody), null, cb);
 	}
 
-	private void send(Request.Builder request, Callback cb)
+	private void send(Request.Builder request, String tokenOverride, Callback cb)
 	{
 		if (!config.serverEnabled())
 		{
 			cb.onResult(null, "Server connection is off. Turn it on in the plugin settings.");
 			return;
 		}
-		String token = config.groupToken().trim();
+		String token = tokenOverride != null ? tokenOverride.trim() : config.groupToken().trim();
 		if (!token.isEmpty())
 		{
 			request.header("Authorization", token);

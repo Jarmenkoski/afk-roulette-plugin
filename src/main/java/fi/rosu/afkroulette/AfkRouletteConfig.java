@@ -37,7 +37,7 @@ public interface AfkRouletteConfig extends Config
 	@ConfigItem(
 		keyName = "groupToken",
 		name = "Group token",
-		description = "Your group's token. Get it in your group's Discord with the /plugin command.",
+		description = "Your group's token. Create or join a group in the panel's Group tab (or use /plugin in the AFK Roulette Discord bot).",
 		secret = true,
 		position = 2
 	)

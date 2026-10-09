@@ -2,6 +2,7 @@ package fi.rosu.afkroulette;
 
 import com.google.inject.Provides;
 import fi.rosu.afkroulette.sync.SyncManager;
+import fi.rosu.afkroulette.tracker.TaskTracker;
 import fi.rosu.afkroulette.ui.AfkRoulettePanel;
 import java.awt.image.BufferedImage;
 import java.time.temporal.ChronoUnit;
@@ -26,6 +27,7 @@ import net.runelite.api.events.ItemContainerChanged;
 import net.runelite.api.events.StatChanged;
 import net.runelite.api.gameval.InventoryID;
 import net.runelite.client.config.ConfigManager;
+import net.runelite.client.eventbus.EventBus;
 import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.events.ConfigChanged;
 import net.runelite.client.game.ItemManager;
@@ -64,6 +66,10 @@ public class AfkRoulettePlugin extends Plugin
 	private SyncManager sync;
 	@Inject
 	private PlayerState player;
+	@Inject
+	private TaskTracker tracker;
+	@Inject
+	private EventBus eventBus;
 
 	private AfkRoulettePanel panel;
 	private NavigationButton navButton;
@@ -82,6 +88,7 @@ public class AfkRoulettePlugin extends Plugin
 			.panel(panel)
 			.build();
 		clientToolbar.addNavigation(navButton);
+		eventBus.register(tracker);
 
 		if (client.getGameState() == GameState.LOGGED_IN)
 		{
@@ -92,6 +99,8 @@ public class AfkRoulettePlugin extends Plugin
 	@Override
 	protected void shutDown()
 	{
+		eventBus.unregister(tracker);
+		tracker.reset();
 		clientToolbar.removeNavigation(navButton);
 		navButton = null;
 		panel = null;
@@ -116,6 +125,7 @@ public class AfkRoulettePlugin extends Plugin
 		else if (event.getGameState() == GameState.LOGIN_SCREEN)
 		{
 			player.setName(null);
+			tracker.reset();
 			if (panel != null)
 			{
 				panel.onPlayerChanged();
@@ -133,6 +143,7 @@ public class AfkRoulettePlugin extends Plugin
 			if (!name.equals(player.getName()))
 			{
 				player.setName(name);
+				tracker.refresh();
 				if (panel != null)
 				{
 					panel.onPlayerChanged();
@@ -141,6 +152,7 @@ public class AfkRoulettePlugin extends Plugin
 		}
 		if (snapshotInTicks > 0 && --snapshotInTicks == 0)
 		{
+			tracker.baseline();
 			collectSkills();
 			collectQuests();
 		}
@@ -186,6 +198,7 @@ public class AfkRoulettePlugin extends Plugin
 		if (AfkRouletteConfig.GROUP.equals(event.getGroup()) && panel != null)
 		{
 			sync.resendAll();
+			tracker.refresh();
 			panel.onConfigChanged();
 		}
 	}
@@ -234,6 +247,7 @@ public class AfkRoulettePlugin extends Plugin
 			quests.put(quest.getName(), quest.getState(client).name());
 		}
 		sync.update(name, "quests", quests);
+		tracker.onQuestStates(quests);
 		sync.update(name, "world", client.getWorld());
 		sync.update(name, "heartbeat", System.currentTimeMillis() / 60_000);
 
