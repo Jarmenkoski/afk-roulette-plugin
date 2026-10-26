@@ -1,5 +1,7 @@
 package fi.rosu.afkroulette.notify;
 
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
 import fi.rosu.afkroulette.AfkRouletteConfig;
 import fi.rosu.afkroulette.ApiClient;
 import fi.rosu.afkroulette.PlayerState;
@@ -10,17 +12,18 @@ import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Base64;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ScheduledExecutorService;
-import java.util.stream.Collectors;
 import javax.imageio.ImageIO;
 import javax.inject.Inject;
 import javax.inject.Singleton;
@@ -30,6 +33,8 @@ import net.runelite.api.Client;
 import net.runelite.api.ItemComposition;
 import net.runelite.api.NPC;
 import net.runelite.api.events.ChatMessage;
+import net.runelite.api.events.GameTick;
+import net.runelite.client.callback.ClientThread;
 import net.runelite.client.chat.ChatColorType;
 import net.runelite.client.chat.ChatMessageBuilder;
 import net.runelite.client.chat.ChatMessageManager;
@@ -48,6 +53,8 @@ import net.runelite.http.api.loottracker.LootRecordType;
 /**
  * Posts the player's rare drops, new collection log items and pets to the group's
  * Discord channel, through the AFK Roulette server (which holds the channel webhook).
+ * Drops pass on value, on rarity (from the wiki drop tables, fetched per source from the
+ * server) or as an event's collection log unique; one loot event is one post.
  */
 @Slf4j
 @Singleton
@@ -56,11 +63,14 @@ public class DropNotifier
 	private static final String CLOG_PREFIX = "New item added to your collection log: ";
 	private static final String PET_FOLLOW = "You have a funny feeling like you";
 	private static final String PET_BACKPACK = "You feel something weird sneaking into your backpack.";
-	/** Screenshots wider than this are scaled down; larger files are sent without one. */
+	/** A pet that is also a new log slot: wait this long for the log message to name it. */
+	private static final int PET_NAME_WAIT_TICKS = 5;
 	private static final int SCREENSHOT_MAX_WIDTH = 1600;
 	private static final int SCREENSHOT_MAX_BYTES = 2_500_000;
+	private static final int MAX_CACHED_SOURCES = 300;
 
 	private final Client client;
+	private final ClientThread clientThread;
 	private final ItemManager itemManager;
 	private final AfkRouletteConfig config;
 	private final ApiClient api;
@@ -68,14 +78,48 @@ public class DropNotifier
 	private final DrawManager drawManager;
 	private final ScheduledExecutorService executor;
 	private final ChatMessageManager chatMessageManager;
+	/** Rarity and uniques per loot source (lower case), from the server. */
+	private final Map<String, SourceInfo> sources = new ConcurrentHashMap<>();
 	/** "No channel set" is said once per session, not on every drop. */
 	private volatile boolean toldNoChannel;
+	/** Client thread: ticks left to name a pet from the collection log message, 0 = none pending. */
+	private int petWaitTicks;
+
+	private static final class SourceInfo
+	{
+		final Map<String, Double> rarity;
+		final Set<String> uniques;
+
+		SourceInfo(Map<String, Double> rarity, Set<String> uniques)
+		{
+			this.rarity = rarity;
+			this.uniques = uniques;
+		}
+	}
+
+	private static final class Drop
+	{
+		final int id;
+		final String name;
+		final int quantity;
+		final long value;
+
+		Drop(int id, String name, int quantity, long value)
+		{
+			this.id = id;
+			this.name = name;
+			this.quantity = quantity;
+			this.value = value;
+		}
+	}
 
 	@Inject
-	DropNotifier(Client client, ItemManager itemManager, AfkRouletteConfig config, ApiClient api, PlayerState player,
-		DrawManager drawManager, ScheduledExecutorService executor, ChatMessageManager chatMessageManager)
+	DropNotifier(Client client, ClientThread clientThread, ItemManager itemManager, AfkRouletteConfig config,
+		ApiClient api, PlayerState player, DrawManager drawManager, ScheduledExecutorService executor,
+		ChatMessageManager chatMessageManager)
 	{
 		this.client = client;
+		this.clientThread = clientThread;
 		this.itemManager = itemManager;
 		this.config = config;
 		this.api = api;
@@ -89,17 +133,20 @@ public class DropNotifier
 	public void onNpcLootReceived(NpcLootReceived event)
 	{
 		NPC npc = event.getNpc();
-		handleLoot(npc == null ? null : npc.getName(), event.getItems());
+		handleLoot(npc == null ? null : npc.getName(), event.getItems(), false);
 	}
 
-	/** Chests, clues, raids, pickpockets... (NPC kills come through NpcLootReceived). */
+	/** Chests, clues, raids, pickpockets... (NPC kills come through NpcLootReceived). Needs the Loot Tracker plugin. */
 	@Subscribe
 	public void onLootReceived(LootReceived event)
 	{
-		if (event.getType() != LootRecordType.NPC)
+		if (event.getType() == LootRecordType.NPC)
 		{
-			handleLoot(event.getName(), event.getItems());
+			return;
 		}
+		// Never another player's name (PvP loot).
+		String source = event.getType() == LootRecordType.PLAYER ? null : event.getName();
+		handleLoot(source, event.getItems(), true);
 	}
 
 	@Subscribe
@@ -110,56 +157,140 @@ public class DropNotifier
 			return;
 		}
 		String message = Text.removeTags(event.getMessage());
-		if (config.notifyCollectionLog() && message.startsWith(CLOG_PREFIX))
+		if (message.startsWith(CLOG_PREFIX))
 		{
 			String item = message.substring(CLOG_PREFIX.length()).trim();
-			if (!item.isEmpty())
+			if (item.isEmpty())
 			{
-				send("clog", item, 0, 1, 0, null);
+				return;
+			}
+			if (petWaitTicks > 0)
+			{
+				// The pet's own log slot: one post, with its name.
+				petWaitTicks = 0;
+				send("pet", item, null, null);
+			}
+			else if (config.notifyCollectionLog())
+			{
+				send("clog", item, null, null);
 			}
 		}
 		else if (config.notifyPets() && (message.startsWith(PET_FOLLOW) || message.equals(PET_BACKPACK)))
 		{
-			send("pet", "", 0, 1, 0, null);
+			petWaitTicks = PET_NAME_WAIT_TICKS;
 		}
 	}
 
-	private void handleLoot(String source, Collection<ItemStack> items)
+	@Subscribe
+	public void onGameTick(GameTick tick)
 	{
-		if (items == null || !enabled())
+		if (petWaitTicks > 0 && --petWaitTicks == 0 && enabled())
+		{
+			send("pet", "", null, null);
+		}
+	}
+
+	/** Client thread. */
+	private void handleLoot(String source, Collection<ItemStack> items, boolean event)
+	{
+		if (items == null || items.isEmpty() || !enabled())
 		{
 			return;
 		}
-		Set<String> always = names(config.notifyAlways());
-		Set<String> never = names(config.notifyNever());
-		long threshold = Math.max(0, config.notifyValue());
 		// One kill can drop the same item in several stacks: count them together.
-		Map<Integer, Integer> quantities = new HashMap<>();
+		Map<Integer, Integer> quantities = new LinkedHashMap<>();
 		for (ItemStack stack : items)
 		{
 			quantities.merge(itemManager.canonicalize(stack.getId()), stack.getQuantity(), Integer::sum);
 		}
+		List<Drop> drops = new ArrayList<>();
 		for (Map.Entry<Integer, Integer> e : quantities.entrySet())
 		{
-			int id = e.getKey();
-			int quantity = e.getValue();
-			ItemComposition item = itemManager.getItemComposition(id);
-			String name = item.getName();
-			String key = name.toLowerCase(Locale.ROOT);
-			if (never.contains(key))
-			{
-				continue;
-			}
-			long price = itemManager.getItemPrice(id);
+			ItemComposition item = itemManager.getItemComposition(e.getKey());
+			long price = itemManager.getItemPrice(e.getKey());
 			if (price <= 0)
 			{
 				price = item.getHaPrice();
 			}
-			long value = Math.max(0, price) * quantity;
-			if (always.contains(key) || (threshold > 0 && value >= threshold))
+			drops.add(new Drop(e.getKey(), item.getName(), e.getValue(), Math.max(0, price) * e.getValue()));
+		}
+
+		boolean needInfo = source != null && (config.notifyRarity() > 0 || (event && config.notifyUniques()));
+		if (!needInfo)
+		{
+			decide(drops, null, source, event);
+			return;
+		}
+		String key = source.toLowerCase(Locale.ROOT);
+		SourceInfo cached = sources.get(key);
+		if (cached != null)
+		{
+			decide(drops, cached, source, event);
+			return;
+		}
+		Map<String, String> q = new HashMap<>();
+		q.put("source", source);
+		api.get("/api/drops/info", q, (json, error) ->
+		{
+			SourceInfo info = error == null ? parseInfo(json) : null;
+			if (info != null)
 			{
-				send("loot", name, id, quantity, value, source);
+				if (sources.size() >= MAX_CACHED_SOURCES)
+				{
+					sources.clear();
+				}
+				sources.put(key, info);
 			}
+			// Without the info, value and the item lists still work.
+			clientThread.invokeLater(() -> decide(drops, info, source, event));
+		});
+	}
+
+	/** Client thread: picks the drops to post and sends them as one notification. */
+	private void decide(List<Drop> drops, SourceInfo info, String source, boolean event)
+	{
+		Set<String> always = names(config.notifyAlways());
+		Set<String> never = names(config.notifyNever());
+		long minValue = Math.max(0, config.notifyValue());
+		int minRarity = Math.max(0, config.notifyRarity());
+		List<Map<String, Object>> posted = new ArrayList<>();
+		for (Drop d : drops)
+		{
+			String key = d.name.toLowerCase(Locale.ROOT);
+			if (never.contains(key))
+			{
+				continue;
+			}
+			Double rarity = info == null ? null : info.rarity.get(key);
+			boolean valueOk = minValue > 0 && d.value >= minValue;
+			boolean rarityOk = minRarity > 0 && rarity != null && rarity >= minRarity;
+			boolean wanted;
+			if (minValue > 0 && minRarity > 0 && config.notifyRequireBoth())
+			{
+				wanted = valueOk && rarityOk;
+			}
+			else
+			{
+				wanted = valueOk || rarityOk;
+			}
+			boolean unique = event && config.notifyUniques() && info != null && info.uniques.contains(key);
+			if (wanted || unique || always.contains(key))
+			{
+				Map<String, Object> item = new HashMap<>();
+				item.put("name", d.name);
+				item.put("itemId", d.id);
+				item.put("quantity", d.quantity);
+				item.put("value", d.value);
+				if (rarity != null)
+				{
+					item.put("rarity", rarity);
+				}
+				posted.add(item);
+			}
+		}
+		if (!posted.isEmpty() && enabled())
+		{
+			send("loot", null, posted, source);
 		}
 	}
 
@@ -171,18 +302,19 @@ public class DropNotifier
 	}
 
 	/** Client thread. The screenshot is taken on the next frame and sent from a worker thread. */
-	private void send(String type, String item, int itemId, int quantity, long value, String source)
+	private void send(String type, String item, List<Map<String, Object>> items, String source)
 	{
 		Map<String, Object> body = new HashMap<>();
 		body.put("name", player.getName());
 		body.put("type", type);
-		body.put("item", item);
-		if (itemId > 0)
+		if (item != null)
 		{
-			body.put("itemId", itemId);
+			body.put("item", item);
 		}
-		body.put("quantity", quantity);
-		body.put("value", value);
+		if (items != null)
+		{
+			body.put("items", items);
+		}
 		if (source != null)
 		{
 			body.put("source", source);
@@ -205,6 +337,11 @@ public class DropNotifier
 
 	private void post(Map<String, Object> body)
 	{
+		// The settings may have changed (or the plugin stopped) while the screenshot was taken.
+		if (!config.serverEnabled() || !config.notifyDiscord())
+		{
+			return;
+		}
 		api.post("/api/plugin/notify", body, (json, error) ->
 		{
 			if (error == null)
@@ -226,6 +363,45 @@ public class DropNotifier
 					.build());
 			}
 		});
+	}
+
+	private static SourceInfo parseInfo(JsonObject json)
+	{
+		if (json == null)
+		{
+			return null;
+		}
+		Map<String, Double> rarity = new HashMap<>();
+		Set<String> uniques = new HashSet<>();
+		try
+		{
+			if (json.has("rarity") && json.get("rarity").isJsonObject())
+			{
+				for (Map.Entry<String, JsonElement> e : json.getAsJsonObject("rarity").entrySet())
+				{
+					if (e.getValue().isJsonPrimitive() && e.getValue().getAsJsonPrimitive().isNumber())
+					{
+						rarity.put(e.getKey().toLowerCase(Locale.ROOT), e.getValue().getAsDouble());
+					}
+				}
+			}
+			if (json.has("uniques") && json.get("uniques").isJsonArray())
+			{
+				for (JsonElement e : json.getAsJsonArray("uniques"))
+				{
+					if (e.isJsonPrimitive())
+					{
+						uniques.add(e.getAsString().toLowerCase(Locale.ROOT));
+					}
+				}
+			}
+		}
+		catch (RuntimeException e)
+		{
+			log.debug("Bad drop info", e);
+			return null;
+		}
+		return new SourceInfo(rarity, uniques);
 	}
 
 	/** JPEG as base64, or null if it can't be made small enough. */
@@ -265,10 +441,17 @@ public class DropNotifier
 	{
 		if (list == null || list.trim().isEmpty())
 		{
-			return new HashSet<>();
+			return Collections.emptySet();
 		}
-		List<String> parts = new ArrayList<>(Arrays.asList(list.split("[,\\n]")));
-		return parts.stream().map(s -> s.trim().toLowerCase(Locale.ROOT)).filter(s -> !s.isEmpty())
-			.collect(Collectors.toSet());
+		Set<String> out = new HashSet<>();
+		for (String part : list.split("[,\\n]"))
+		{
+			String s = part.trim().toLowerCase(Locale.ROOT);
+			if (!s.isEmpty())
+			{
+				out.add(s);
+			}
+		}
+		return out;
 	}
 }

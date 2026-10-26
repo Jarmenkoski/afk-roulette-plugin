@@ -101,7 +101,8 @@ public interface AfkRouletteConfig extends Config
 	@ConfigItem(
 		keyName = "notifyValue",
 		name = "Drop value (gp)",
-		description = "Post drops worth at least this much (GE price, or high alch value for untradeables). 0 = only the always-post list.",
+		description = "Post drops worth at least this much (GE price, or high alch value for untradeables). 0 = off. "
+			+ "Chests, clues and raids need RuneLite's Loot Tracker plugin turned on.",
 		section = NOTIFY_SECTION,
 		position = 12
 	)
@@ -111,12 +112,48 @@ public interface AfkRouletteConfig extends Config
 	}
 
 	@ConfigItem(
+		keyName = "notifyRarity",
+		name = "Drop rarity (1/x)",
+		description = "Post NPC drops at least this rare, e.g. 512 = 1/512 or rarer (OSRS Wiki drop rates). 0 = off.",
+		section = NOTIFY_SECTION,
+		position = 13
+	)
+	default int notifyRarity()
+	{
+		return 0;
+	}
+
+	@ConfigItem(
+		keyName = "notifyRequireBoth",
+		name = "Require both value and rarity",
+		description = "With both limits set, post only drops that pass both (otherwise either one is enough)",
+		section = NOTIFY_SECTION,
+		position = 14
+	)
+	default boolean notifyRequireBoth()
+	{
+		return false;
+	}
+
+	@ConfigItem(
+		keyName = "notifyUniques",
+		name = "Always post uniques (raids, chests, clues)",
+		description = "Post every collection log item from raids, Barrows, clues and other chests, whatever its value",
+		section = NOTIFY_SECTION,
+		position = 15
+	)
+	default boolean notifyUniques()
+	{
+		return false;
+	}
+
+	@ConfigItem(
 		keyName = "notifyCollectionLog",
 		name = "New collection log items",
 		description = "Post new collection log items. Needs the in-game setting "
 			+ "Collection log - New addition notification (chat message) turned on.",
 		section = NOTIFY_SECTION,
-		position = 13
+		position = 16
 	)
 	default boolean notifyCollectionLog()
 	{
@@ -128,7 +165,7 @@ public interface AfkRouletteConfig extends Config
 		name = "Pets",
 		description = "Post when you get a pet",
 		section = NOTIFY_SECTION,
-		position = 14
+		position = 17
 	)
 	default boolean notifyPets()
 	{
@@ -138,13 +175,13 @@ public interface AfkRouletteConfig extends Config
 	@ConfigItem(
 		keyName = "notifyScreenshot",
 		name = "Include a screenshot",
-		description = "Attach a screenshot of the game to the Discord post",
+		description = "Attach a screenshot of the game to the Discord post. It shows your chatbox too.",
 		section = NOTIFY_SECTION,
-		position = 15
+		position = 18
 	)
 	default boolean notifyScreenshot()
 	{
-		return true;
+		return false;
 	}
 
 	@ConfigItem(
@@ -152,7 +189,7 @@ public interface AfkRouletteConfig extends Config
 		name = "Always post",
 		description = "Item names that are always posted, whatever their value (comma separated)",
 		section = NOTIFY_SECTION,
-		position = 16
+		position = 19
 	)
 	default String notifyAlways()
 	{
@@ -164,7 +201,7 @@ public interface AfkRouletteConfig extends Config
 		name = "Never post",
 		description = "Item names that are never posted (comma separated)",
 		section = NOTIFY_SECTION,
-		position = 17
+		position = 20
 	)
 	default String notifyNever()
 	{

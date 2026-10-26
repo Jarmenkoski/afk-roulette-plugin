@@ -284,9 +284,11 @@ public class GroupTab extends JPanel
 
 	private void loadChannel()
 	{
+		String token = config.groupToken().trim();
 		api.get("/api/plugin/group/info", null, (json, error) -> SwingUtilities.invokeLater(() ->
 		{
-			if (error != null || json == null)
+			// An answer about a group we have since left or switched from.
+			if (error != null || json == null || !token.equals(config.groupToken().trim()))
 			{
 				return;
 			}
@@ -318,6 +320,12 @@ public class GroupTab extends JPanel
 		JLabel feedback = Ui.label("", Ui.MUTED, false, width);
 		save.addActionListener(e ->
 		{
+			if (webhook.getText().trim().isEmpty() && JOptionPane.showConfirmDialog(this,
+				"Stop posting the group's drops to Discord?", "Discord", JOptionPane.YES_NO_OPTION)
+				!= JOptionPane.YES_OPTION)
+			{
+				return;
+			}
 			save.setEnabled(false);
 			Map<String, Object> body = new HashMap<>();
 			body.put("url", webhook.getText().trim());
