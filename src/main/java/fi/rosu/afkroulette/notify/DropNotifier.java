@@ -150,12 +150,12 @@ public class DropNotifier
 			{
 				continue;
 			}
-			int price = itemManager.getItemPrice(id);
+			long price = itemManager.getItemPrice(id);
 			if (price <= 0)
 			{
 				price = item.getHaPrice();
 			}
-			long value = (long) Math.max(0, price) * quantity;
+			long value = Math.max(0, price) * quantity;
 			if (always.contains(key) || (threshold > 0 && value >= threshold))
 			{
 				send("loot", name, id, quantity, value, source);
