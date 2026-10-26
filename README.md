@@ -24,6 +24,17 @@ Both server options are off by default. Each group is its own space on the serve
 - A few tasks can't be seen from the game (e.g. Sailing, farming runs, some minigames); those keep the Done button.
 - Progress is saved per account, so it survives restarting the client.
 
+## What's new
+
+**October 2026**
+- **Discord notifications:** rare drops, new collection log items and pets are posted to your group's Discord channel.
+  - Limits like the old Discord Rare Drop Notificater: drop value (GE or high alch), drop rarity (1/x, from the OSRS Wiki drop tables), *require both*, *always post uniques* from raids, Barrows, clues and other chests, and always/never-post item lists.
+  - One post per loot, with an optional screenshot (off by default, as it shows your chatbox).
+  - The group can turn collection log and pet posts off for everyone in the Group tab, to keep the channel to rare drops only.
+  - A group made with `/plugin` in Discord posts to that server's channel; other groups paste a channel webhook in the Group tab.
+
+**First release (October 2026):** tasks with automatic completion and the roll reel, groups with tokens, shared stats, gear and item search.
+
 ## Privacy
 
 Nothing is sent until you turn on **Connect to AFK Roulette server** (off by default). What the plugin sends to the AFK Roulette server (afk-api.rosu.fi):

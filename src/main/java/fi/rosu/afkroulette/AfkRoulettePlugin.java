@@ -48,8 +48,9 @@ import net.runelite.client.util.ImageUtil;
 @Slf4j
 @PluginDescriptor(
 	name = "AFK Roulette",
-	description = "Task roulette plus a group tracker: shared stats, gear and item search",
-	tags = {"task", "tasker", "roulette", "afk", "group", "ironman", "gim", "items", "search"}
+	description = "Task roulette, a group tracker (shared stats, gear and item search) and Discord drop notifications",
+	tags = {"task", "tasker", "roulette", "afk", "group", "ironman", "gim", "items", "search",
+		"discord", "drops", "loot", "notifications", "collection log", "pets"}
 )
 public class AfkRoulettePlugin extends Plugin
 {
