@@ -150,8 +150,9 @@ public interface AfkRouletteConfig extends Config
 	@ConfigItem(
 		keyName = "notifyCollectionLog",
 		name = "New collection log items",
-		description = "Post new collection log items. Needs the in-game setting "
-			+ "Collection log - New addition notification (chat message) turned on.",
+		description = "Post your new collection log items. Needs the in-game setting "
+			+ "Collection log - New addition notification (chat message) turned on. "
+			+ "The group can also turn these off for everyone in the Group tab.",
 		section = NOTIFY_SECTION,
 		position = 16
 	)
@@ -163,7 +164,7 @@ public interface AfkRouletteConfig extends Config
 	@ConfigItem(
 		keyName = "notifyPets",
 		name = "Pets",
-		description = "Post when you get a pet",
+		description = "Post when you get a pet. The group can also turn these off for everyone in the Group tab.",
 		section = NOTIFY_SECTION,
 		position = 17
 	)

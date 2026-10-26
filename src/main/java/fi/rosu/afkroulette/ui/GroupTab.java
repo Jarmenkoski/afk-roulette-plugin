@@ -25,6 +25,7 @@ import javax.inject.Inject;
 import javax.inject.Singleton;
 import javax.swing.ImageIcon;
 import javax.swing.JButton;
+import javax.swing.JCheckBox;
 import javax.swing.JLabel;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
@@ -77,6 +78,9 @@ public class GroupTab extends JPanel
 	/** Where the group's Discord notifications go: null = not known yet. */
 	private Boolean homeGroup;
 	private Boolean hasChannel;
+	/** Group-wide: post new collection log items / pets to Discord at all. */
+	private boolean groupNotifyClog = true;
+	private boolean groupNotifyPets = true;
 	private final Set<String> expanded = new HashSet<>();
 
 	@Inject
@@ -126,6 +130,8 @@ public class GroupTab extends JPanel
 		{
 			homeGroup = null;
 			hasChannel = null;
+			groupNotifyClog = true;
+			groupNotifyPets = true;
 			group.clear();
 			list.removeAll();
 			list.revalidate();
@@ -294,6 +300,8 @@ public class GroupTab extends JPanel
 			}
 			homeGroup = json.has("home") && json.get("home").isJsonPrimitive() && json.get("home").getAsBoolean();
 			hasChannel = json.has("webhook") && json.get("webhook").isJsonPrimitive() && json.get("webhook").getAsBoolean();
+			groupNotifyClog = flag(json, "notifyClog", true);
+			groupNotifyPets = flag(json, "notifyPets", true);
 			rebuildGroupBox();
 		}));
 	}
@@ -309,6 +317,7 @@ public class GroupTab extends JPanel
 		if (Boolean.TRUE.equals(homeGroup))
 		{
 			groupBox.add(Ui.label("Discord: drop notifications go to your group's Discord channel.", Ui.MUTED, false, width));
+			addGroupSwitches();
 			return;
 		}
 		groupBox.add(Ui.label(Boolean.TRUE.equals(hasChannel)
@@ -346,6 +355,52 @@ public class GroupTab extends JPanel
 		groupBox.add(webhook);
 		groupBox.add(save);
 		groupBox.add(feedback);
+		addGroupSwitches();
+	}
+
+	/** For the whole group: rare drops are always posted, these two can be turned off to cut spam. */
+	private void addGroupSwitches()
+	{
+		JCheckBox clog = new JCheckBox("Post new collection log items", groupNotifyClog);
+		JCheckBox pets = new JCheckBox("Post pets", groupNotifyPets);
+		for (JCheckBox box : new JCheckBox[]{clog, pets})
+		{
+			box.setOpaque(false);
+			box.setForeground(Ui.MUTED);
+			box.setToolTipText("For everyone in the group. Rare drops are always posted.");
+			box.addActionListener(e -> saveGroupSwitches(clog, pets));
+			groupBox.add(box);
+		}
+	}
+
+	private void saveGroupSwitches(JCheckBox clog, JCheckBox pets)
+	{
+		Map<String, Object> body = new HashMap<>();
+		body.put("clog", clog.isSelected());
+		body.put("pets", pets.isSelected());
+		clog.setEnabled(false);
+		pets.setEnabled(false);
+		api.post("/api/plugin/group/notify-settings", body, (json, error) -> SwingUtilities.invokeLater(() ->
+		{
+			if (error == null && json != null)
+			{
+				groupNotifyClog = flag(json, "notifyClog", clog.isSelected());
+				groupNotifyPets = flag(json, "notifyPets", pets.isSelected());
+			}
+			else
+			{
+				setStatus("Could not save the Discord settings: " + error);
+			}
+			clog.setSelected(groupNotifyClog);
+			pets.setSelected(groupNotifyPets);
+			clog.setEnabled(true);
+			pets.setEnabled(true);
+		}));
+	}
+
+	private static boolean flag(JsonObject json, String key, boolean fallback)
+	{
+		return json.has(key) && json.get(key).isJsonPrimitive() ? json.get(key).getAsBoolean() : fallback;
 	}
 
 	private void leaveGroup()
