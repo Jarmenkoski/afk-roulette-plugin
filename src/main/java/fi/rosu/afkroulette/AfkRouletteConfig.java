@@ -3,6 +3,7 @@ package fi.rosu.afkroulette;
 import net.runelite.client.config.Config;
 import net.runelite.client.config.ConfigGroup;
 import net.runelite.client.config.ConfigItem;
+import net.runelite.client.config.ConfigSection;
 
 @ConfigGroup(AfkRouletteConfig.GROUP)
 public interface AfkRouletteConfig extends Config
@@ -73,5 +74,100 @@ public interface AfkRouletteConfig extends Config
 	default boolean rollSound()
 	{
 		return true;
+	}
+
+	@ConfigSection(
+		name = "Discord notifications",
+		description = "Post your rare drops, new collection log items and pets to your group's Discord channel",
+		position = 10
+	)
+	String NOTIFY_SECTION = "notifications";
+
+	@ConfigItem(
+		keyName = "notifyDiscord",
+		name = "Post to the group's Discord",
+		description = "Post your rare drops, new collection log items and pets to your group's Discord channel "
+			+ "(the channel is set in the panel's Group tab; a group made with /plugin in Discord uses that server's channel). "
+			+ "Sends the item, its value, where it came from and optionally a screenshot of your game.",
+		warning = SERVER_WARNING,
+		section = NOTIFY_SECTION,
+		position = 11
+	)
+	default boolean notifyDiscord()
+	{
+		return false;
+	}
+
+	@ConfigItem(
+		keyName = "notifyValue",
+		name = "Drop value (gp)",
+		description = "Post drops worth at least this much (GE price, or high alch value for untradeables). 0 = only the always-post list.",
+		section = NOTIFY_SECTION,
+		position = 12
+	)
+	default int notifyValue()
+	{
+		return 1_000_000;
+	}
+
+	@ConfigItem(
+		keyName = "notifyCollectionLog",
+		name = "New collection log items",
+		description = "Post new collection log items. Needs the in-game setting "
+			+ "Collection log - New addition notification (chat message) turned on.",
+		section = NOTIFY_SECTION,
+		position = 13
+	)
+	default boolean notifyCollectionLog()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "notifyPets",
+		name = "Pets",
+		description = "Post when you get a pet",
+		section = NOTIFY_SECTION,
+		position = 14
+	)
+	default boolean notifyPets()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "notifyScreenshot",
+		name = "Include a screenshot",
+		description = "Attach a screenshot of the game to the Discord post",
+		section = NOTIFY_SECTION,
+		position = 15
+	)
+	default boolean notifyScreenshot()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "notifyAlways",
+		name = "Always post",
+		description = "Item names that are always posted, whatever their value (comma separated)",
+		section = NOTIFY_SECTION,
+		position = 16
+	)
+	default String notifyAlways()
+	{
+		return "";
+	}
+
+	@ConfigItem(
+		keyName = "notifyNever",
+		name = "Never post",
+		description = "Item names that are never posted (comma separated)",
+		section = NOTIFY_SECTION,
+		position = 17
+	)
+	default String notifyNever()
+	{
+		return "";
 	}
 }

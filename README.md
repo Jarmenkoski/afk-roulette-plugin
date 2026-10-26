@@ -4,6 +4,7 @@ A RuneLite plugin for groups that play together (built for a Group Ironman team)
 
 - **Tasks** — roll AFK tasks (the best xp/h AFK method you can do in a random skill; as many as you like, one done a day keeps your streak), or a skill, boss or collection log task matched to your levels. Most tasks **complete automatically** from what happens in game: xp drops, kill counts, collection log notifications, diary completions, kills and your quest log. Done/Skip are tracked, with streaks and group highscores. Each roll spins a case-opening style reel over the game view: skill icons for skill tasks, boss pets for boss tasks and collection log items for log tasks (turn it or its sounds off in the config).
 - **Group** — create or join a group, then see your members' levels, worn gear and inventory.
+- **Discord notifications** — rare drops (by value, plus an always/never list), new collection log items and pets are posted to your group's Discord channel, with a screenshot if you like. Turn on *Post to the group's Discord* in the config; a group made with `/plugin` in Discord posts to that server's channel, other groups paste a channel webhook in the Group tab.
 - **Items** — search every member's bank, inventory, gear and seed vault at once (e.g. "lobster" shows Lobster and Raw lobster per member).
 
 The same tasks, streaks and highscores are shared with the [AFK Roulette website](https://afk.rosu.fi) and its Discord bot.
@@ -28,6 +29,7 @@ Both server options are off by default. Each group is its own space on the serve
 Nothing is sent until you turn on **Connect to AFK Roulette server** (off by default). What the plugin sends to the AFK Roulette server (afk-api.rosu.fi):
 
 - **With the server on:** your IP address, your RuneScape name and your task results (completions and skips, which the plugin derives from xp drops, kill counts, collection log, diary and quest messages).
+- **With "Post to the group's Discord" on:** the item, its value and where it came from, and optionally a screenshot of your game, for each notification.
 - **With "Share my data with the group" on, additionally:** your levels, xp, quest states, inventory, equipment, bank, seed vault, current world and an online heartbeat.
 
 Shared data can only be read by people with your group's token. Turning sharing off (or switching to another group token) removes your shared data from the group; your tasks and streaks there stay. **Leave group** also removes your task history in a group made in the plugin. Turn sharing off before turning the server connection off: with the connection off the plugin doesn't contact the server at all. Privacy policy: https://afk.rosu.fi/privacy.html

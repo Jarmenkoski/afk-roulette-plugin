@@ -1,6 +1,7 @@
 package fi.rosu.afkroulette;
 
 import com.google.inject.Provides;
+import fi.rosu.afkroulette.notify.DropNotifier;
 import fi.rosu.afkroulette.reel.RollOverlay;
 import fi.rosu.afkroulette.sync.SyncManager;
 import fi.rosu.afkroulette.tracker.TaskTracker;
@@ -83,6 +84,8 @@ public class AfkRoulettePlugin extends Plugin
 	@Inject
 	private RollOverlay rollOverlay;
 	@Inject
+	private DropNotifier dropNotifier;
+	@Inject
 	private ConfigManager configManager;
 
 	private AfkRoulettePanel panel;
@@ -107,6 +110,7 @@ public class AfkRoulettePlugin extends Plugin
 		overlayManager.add(rollOverlay);
 		configProfileId = currentConfigProfileId();
 		eventBus.register(tracker);
+		eventBus.register(dropNotifier);
 
 		if (client.getGameState() == GameState.LOGGED_IN)
 		{
@@ -118,6 +122,7 @@ public class AfkRoulettePlugin extends Plugin
 	protected void shutDown()
 	{
 		eventBus.unregister(tracker);
+		eventBus.unregister(dropNotifier);
 		clientThread.invoke(tracker::reset);
 		overlayManager.remove(rollOverlay);
 		rollOverlay.stop();

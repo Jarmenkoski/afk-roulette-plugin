@@ -74,6 +74,9 @@ public class GroupTab extends JPanel
 	private final JPanel scores = new JPanel(new DynamicGridLayout(0, 1, 0, 2));
 	private final JLabel status = Ui.label("", Ui.MUTED, false);
 	private final JButton refresh = Ui.button("Refresh");
+	/** Where the group's Discord notifications go: null = not known yet. */
+	private Boolean homeGroup;
+	private Boolean hasChannel;
 	private final Set<String> expanded = new HashSet<>();
 
 	@Inject
@@ -121,6 +124,8 @@ public class GroupTab extends JPanel
 		rebuildGroupBox();
 		if (!inGroup())
 		{
+			homeGroup = null;
+			hasChannel = null;
 			group.clear();
 			list.removeAll();
 			list.revalidate();
@@ -136,6 +141,7 @@ public class GroupTab extends JPanel
 		refresh.setEnabled(false);
 		setStatus("Loading...");
 		loadScores();
+		loadChannel();
 		group.refresh(() ->
 		{
 			refresh.setEnabled(true);
@@ -192,6 +198,7 @@ public class GroupTab extends JPanel
 			row.add(copy);
 			row.add(leave);
 			groupBox.add(row);
+			addChannelControls();
 		}
 		groupBox.revalidate();
 		groupBox.repaint();
@@ -273,6 +280,64 @@ public class GroupTab extends JPanel
 				configManager.setConfiguration(AfkRouletteConfig.GROUP, TOKEN_KEY, token);
 			}));
 		});
+	}
+
+	private void loadChannel()
+	{
+		api.get("/api/plugin/group/info", null, (json, error) -> SwingUtilities.invokeLater(() ->
+		{
+			if (error != null || json == null)
+			{
+				return;
+			}
+			homeGroup = json.has("home") && json.get("home").isJsonPrimitive() && json.get("home").getAsBoolean();
+			hasChannel = json.has("webhook") && json.get("webhook").isJsonPrimitive() && json.get("webhook").getAsBoolean();
+			rebuildGroupBox();
+		}));
+	}
+
+	/** The group's Discord channel for drop notifications (Configuration > Discord notifications). */
+	private void addChannelControls()
+	{
+		int width = Ui.TEXT_WIDTH - 16;
+		if (homeGroup == null)
+		{
+			return;
+		}
+		if (Boolean.TRUE.equals(homeGroup))
+		{
+			groupBox.add(Ui.label("Discord: drop notifications go to your group's Discord channel.", Ui.MUTED, false, width));
+			return;
+		}
+		groupBox.add(Ui.label(Boolean.TRUE.equals(hasChannel)
+			? "Discord: drop notifications go to your group's channel webhook. Paste a new one to change it, or save empty to stop."
+			: "Discord: to post drops, paste a channel webhook (Discord channel settings > Integrations > Webhooks).",
+			Ui.MUTED, false, width));
+		JTextField webhook = field("Discord webhook URL");
+		JButton save = Ui.button("Save webhook");
+		JLabel feedback = Ui.label("", Ui.MUTED, false, width);
+		save.addActionListener(e ->
+		{
+			save.setEnabled(false);
+			Map<String, Object> body = new HashMap<>();
+			body.put("url", webhook.getText().trim());
+			api.post("/api/plugin/group/webhook", body, (json, error) -> SwingUtilities.invokeLater(() ->
+			{
+				save.setEnabled(true);
+				if (error != null)
+				{
+					showFeedback(feedback, error, Ui.ERROR);
+					return;
+				}
+				hasChannel = json != null && json.has("webhook") && json.get("webhook").isJsonPrimitive()
+					&& json.get("webhook").getAsBoolean();
+				webhook.setText("");
+				showFeedback(feedback, Boolean.TRUE.equals(hasChannel) ? "Saved." : "Removed.", Ui.OK);
+			}));
+		});
+		groupBox.add(webhook);
+		groupBox.add(save);
+		groupBox.add(feedback);
 	}
 
 	private void leaveGroup()
