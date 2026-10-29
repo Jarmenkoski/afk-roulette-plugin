@@ -78,6 +78,8 @@ public class GroupTab extends JPanel
 	/** Where the group's Discord notifications go: null = not known yet. */
 	private Boolean homeGroup;
 	private Boolean hasChannel;
+	/** The group has its own webhook instead of its Discord server's default channel. */
+	private boolean customChannel;
 	/** Group-wide: post new collection log items / pets to Discord at all. */
 	private boolean groupNotifyClog = true;
 	private boolean groupNotifyPets = true;
@@ -301,6 +303,7 @@ public class GroupTab extends JPanel
 			homeGroup = json.has("home") && json.get("home").isJsonPrimitive() && json.get("home").getAsBoolean();
 			hasChannel = json.has("webhook") && json.get("webhook").isJsonPrimitive() && json.get("webhook").getAsBoolean();
 			groupNotifyClog = flag(json, "notifyClog", true);
+			customChannel = flag(json, "customWebhook", false);
 			groupNotifyPets = flag(json, "notifyPets", true);
 			rebuildGroupBox();
 		}));
@@ -316,7 +319,34 @@ public class GroupTab extends JPanel
 		}
 		if (Boolean.TRUE.equals(homeGroup))
 		{
-			groupBox.add(Ui.label("Discord: drop notifications go to your group's Discord channel.", Ui.MUTED, false, width));
+			if (!customChannel)
+			{
+				groupBox.add(Ui.label("Discord: drop notifications go to your group's Discord channel. "
+					+ "To use another channel, paste its webhook in the settings (Discord notifications).", Ui.MUTED, false, width));
+			}
+			else
+			{
+				groupBox.add(Ui.label("Discord: drop notifications go to a channel set in RuneLite.", Ui.MUTED, false, width));
+				JButton reset = Ui.button("Use the Discord server's channel");
+				reset.addActionListener(e ->
+				{
+					reset.setEnabled(false);
+					Map<String, Object> body = new HashMap<>();
+					body.put("url", "");
+					api.post("/api/plugin/group/webhook", body, (json, error) -> SwingUtilities.invokeLater(() ->
+					{
+						reset.setEnabled(true);
+						if (error != null)
+						{
+							setStatus("Could not change the Discord channel: " + error);
+							return;
+						}
+						customChannel = false;
+						rebuildGroupBox();
+					}));
+				});
+				groupBox.add(reset);
+			}
 			addGroupSwitches();
 			return;
 		}

@@ -335,6 +335,47 @@ public class DropNotifier
 		}));
 	}
 
+	/** Make {@code url} the group's notification channel; the result is told in the chatbox. */
+	public void setGroupChannel(String url)
+	{
+		if (!config.serverEnabled() || config.groupToken().trim().isEmpty())
+		{
+			chat("join a group and turn on the server connection first, then paste the webhook again.");
+			return;
+		}
+		Map<String, Object> body = new HashMap<>();
+		body.put("url", url);
+		if (player.getName() != null)
+		{
+			body.put("name", player.getName());
+		}
+		api.post("/api/plugin/group/webhook", body, (json, error) ->
+		{
+			if (error == null)
+			{
+				toldNoChannel = false;
+				chat("drop notifications now go to the new Discord channel.");
+			}
+			else
+			{
+				chat("the Discord webhook was not saved: " + error);
+			}
+		});
+	}
+
+	private void chat(String text)
+	{
+		chatMessageManager.queue(QueuedMessage.builder()
+			.type(ChatMessageType.GAMEMESSAGE)
+			.runeLiteFormattedMessage(new ChatMessageBuilder()
+				.append(ChatColorType.HIGHLIGHT)
+				.append("AFK Roulette: ")
+				.append(ChatColorType.NORMAL)
+				.append(text)
+				.build())
+			.build());
+	}
+
 	private void post(Map<String, Object> body)
 	{
 		// The settings may have changed (or the plugin stopped) while the screenshot was taken.

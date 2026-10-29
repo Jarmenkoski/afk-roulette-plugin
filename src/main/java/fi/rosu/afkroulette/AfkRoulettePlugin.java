@@ -226,6 +226,16 @@ public class AfkRoulettePlugin extends Plugin
 	@Subscribe
 	public void onConfigChanged(ConfigChanged event)
 	{
+		// A webhook pasted into the settings becomes the group's notification channel.
+		if (AfkRouletteConfig.GROUP.equals(event.getGroup()) && "notifyWebhook".equals(event.getKey())
+			&& currentConfigProfileId() == configProfileId)
+		{
+			String url = event.getNewValue() == null ? "" : event.getNewValue().trim();
+			if (!url.isEmpty() && !url.equals(event.getOldValue() == null ? "" : event.getOldValue().trim()))
+			{
+				dropNotifier.setGroupChannel(url);
+			}
+		}
 		// Only the user's settings: the tracker's own progress saves (RS-profile keys
 		// in the same group) must not reload everything.
 		if (AfkRouletteConfig.GROUP.equals(event.getGroup()) && panel != null
